@@ -240,9 +240,9 @@ function countryGroups(full) {
 function authDialog(mode, draft = entry, useCode = !draft.name && !!draft.student_code) {
   const claim = mode === 'claim';
   openModal(claim ? '认领我的身份' : '同学，欢迎回来', `<div class="segmented auth-tabs"><button id="tab-login" class="${claim ? '' : 'active'}">个人登录</button><button id="tab-claim" class="${claim ? 'active' : ''}">首次认领</button></div>
-    <p class="muted">${claim ? '填写姓名和管理员发给你的一次性认领码，再设置自己的密码，长短、全数字都可以。' : '使用名单中的姓名和自己设置的密码登录。'}</p>
+    <p class="muted">${claim ? '填写姓名和管理员发给你的一次性认领码，再设置自己的密码。个人密码至少 6 位，允许纯数字，无需混合字母或符号。' : '使用名单中的姓名和自己设置的密码登录。'}</p>
     <form id="auth-form"><label>${useCode ? '班级编号' : '姓名'}<input name="${useCode ? 'student_code' : 'name'}" value="${escape(useCode ? draft.student_code : draft.name)}" autocomplete="username" maxlength="${useCode ? 64 : 60}" required></label>${claim ? `<label>一次性认领码<input name="claim_code" value="${escape(draft.claim_code)}" autocomplete="off" maxlength="200" required></label>` : ''}
-    <label>${claim ? '设置个人密码' : '个人密码'}<input name="password" type="password" autocomplete="${claim ? 'new-password' : 'current-password'}" maxlength="200" required></label>
+    <label>${claim ? '设置个人密码（至少 6 位）' : '个人密码'}<input name="password" type="password" autocomplete="${claim ? 'new-password' : 'current-password'}" ${claim ? 'minlength="6"' : ''} maxlength="200" required></label>
     ${claim && !state.boot.unlocked ? '<p class="form-error">认领前请先关闭窗口，输入班级查看码。</p>' : ''}<button type="submit" class="primary" ${claim && !state.boot.unlocked ? 'disabled' : ''}>${claim ? '认领并进入' : '登录'}</button></form>
     <details><summary>同名或使用原来的班级编号</summary><p class="muted">同名同学可凭各自的认领码认领；登录时请使用管理员提供的班级编号。</p><button id="identity-toggle" class="text-button">${useCode ? '改用姓名' : '使用班级编号'}</button></details><p class="muted">忘记个人密码可联系管理员重新发放认领码。</p>`);
   const remember = () => {
@@ -263,7 +263,8 @@ function authDialog(mode, draft = entry, useCode = !draft.name && !!draft.studen
   });
 }
 function passwordDialog() {
-  openModal('修改个人密码', `<form id="password-form"><label>原密码<input type="password" name="old_password" autocomplete="current-password" required></label><label>新密码${state.boot.is_admin ? '（至少 10 位）' : ''}<input type="password" name="password" autocomplete="new-password" ${state.boot.is_admin ? 'minlength="10"' : ''} maxlength="200" required></label><button class="primary" type="submit">保存新密码</button></form>`);
+  const minimum = state.boot.is_admin ? 10 : 6;
+  openModal('修改个人密码', `<form id="password-form"><label>原密码<input type="password" name="old_password" autocomplete="current-password" required></label><label>新密码（至少 ${minimum} 位）<input type="password" name="password" autocomplete="new-password" minlength="${minimum}" maxlength="200" required></label><button class="primary" type="submit">保存新密码</button></form>`);
   bindForm('#password-form', async data => {await api('password', 'POST', data); closeModal(); notify('个人密码已更新，其他设备需要重新登录。');});
 }
 // Member detail lives in the sheet (full height) instead of a modal.
