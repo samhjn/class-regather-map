@@ -128,11 +128,11 @@ async function refresh() {
   state.members = orderMembers(result.members);
   const confirmed = state.members.map(member => member.location?.confirmed_at).filter(Boolean).sort();
   state.earliest = confirmed[0]?.slice(0, 10) || state.boot.today;
-  if (!state.range) {
-    state.range = presetRange('3y', state.boot.today, state.earliest);
-    rangeControl = mountRange($('#range'), {today: state.boot.today, earliest: state.earliest, range: state.range, preset: state.preset,
-      onChange: (range, preset) => {state.range = range; state.preset = preset; render();}});
-  }
+  // Imports and edits can change the earliest confirmation. Rebuild the axis and
+  // preset closures with the new data, while preserving a manually chosen range.
+  if (state.preset) state.range = presetRange(state.preset, state.boot.today, state.earliest);
+  rangeControl = mountRange($('#range'), {today: state.boot.today, earliest: state.earliest, range: state.range, preset: state.preset,
+    onChange: (range, preset) => {state.range = range; state.preset = preset; render();}});
   render();
 }
 function rangeLabel() {
@@ -197,15 +197,17 @@ function renderSheet() {
     $('#sheet-title').textContent = `${shown} 位同学`;
     const missing = state.members.filter(member => !member.location).length;
     $('#sheet-summary').textContent = `${rangeLabel()}确认过位置 · 全班 ${state.members.length} 人${missing ? ` · 另有 ${missing} 人未填位置` : ''}`;
-    if (!shown) html = '<div id="empty" class="empty"><p>这个时间段还没有同学确认过位置</p><button id="expand-range" class="secondary" type="button">扩大时间范围</button></div>';
-    else if (state.scope === 'world') html = countryGroups(full);
+    if (state.scope === 'world') html = countryGroups(full);
     else {
       const {inRange: fresh, others} = splitForRegion(state.members, null, 'china', state.range);
       const other = otherGroup(state.range.to === null);
-      html = full ? section(sectionTitle(true), fresh.length) + rows(fresh, {showPlace: true}) + (others.length ? section(other.title, others.length, other.note) + rows(others, {showPlace: true}) : '')
+      const remaining = Math.max(0, fresh.length - 3) + others.length + missing;
+      html = full ? (fresh.length ? section(sectionTitle(true), fresh.length) + rows(fresh, {showPlace: true}) : '') + (others.length ? section(other.title, others.length, other.note) + rows(others, {showPlace: true}) : '')
           + unplacedGroup()
-        : section('最近更新', fresh.length) + rows(fresh.slice(0, 3), {showPlace: true}) + (fresh.length > 3 || others.length ? moreRow('展开全部', `还有 ${Math.max(0, fresh.length - 3)} 人`) : '');
+        : (fresh.length ? section('最近更新', fresh.length) + rows(fresh.slice(0, 3), {showPlace: true}) : '') + (remaining ? moreRow('展开全部', `还有 ${remaining} 人`) : '');
     }
+    // Zero map counts do not mean an empty roster: keep older and unplaced people reachable.
+    if (!shown) html = '<div id="empty" class="empty"><p>这个时间段还没有同学确认过位置</p><button id="expand-range" class="secondary" type="button">扩大时间范围</button></div>' + html;
   } else {
     const {key, level} = state.view;
     const name = regionName(key, level);
@@ -232,10 +234,11 @@ function countryGroups(full) {
     groups.set(name, [...(groups.get(name) || []), member]);
   }
   const other = otherGroup(state.range.to === null);
-  const truncated = [...groups.values()].some(list => list.length > 3);
+  const remaining = [...groups.values()].reduce((n, list) => n + Math.max(0, list.length - 3), 0)
+    + others.length + state.members.filter(member => !member.location).length;
   return [...groups].map(([name, list]) => section(escape(name), list.length) + rows(full ? list : list.slice(0, 3))).join('')
     + (full ? (others.length ? section(other.title, others.length, other.note) + rows(others, {showPlace: true}) : '') + unplacedGroup()
-      : (truncated || others.length ? moreRow('展开全部', others.length ? `另有 ${others.length} 条${other.title}` : '') : ''));
+      : (remaining ? moreRow('展开全部', `还有 ${remaining} 人`) : ''));
 }
 function authDialog(mode, draft = entry, useCode = !draft.name && !!draft.student_code) {
   const claim = mode === 'claim';
@@ -355,6 +358,8 @@ function leaveUpdate() {
 function leaveMember() {
   footprintMap?.destroy(); footprintMap = null;
   state.view = state.view.back || {type: 'home'};
+  // Update forms, like member details, must be rebuilt rather than passed to renderSheet().
+  if (state.view.type === 'update') {run(openUpdate); return;}
   render(); sheet.snap(state.view.type === 'home' ? 'peek' : 'half');
 }
 function profileDialog(member) {
@@ -388,7 +393,12 @@ function locationDialog(member, loc = {}) {
     $('#longitude').value = ''; $('#latitude').value = ''; marker?.setMap(null);
     $('#point-status').textContent = '只记录城市；如需共享位置点，请重新选点。';
   }
-  let mode = abroad ? 'world' : 'china';
+  let mode = abroad ? 'world' : 'china', placeSelected = !!loc.country_code;
+  const clearPlace = () => {
+    placeSelected = false;
+    $('#country-code').value = mode === 'china' ? 'CHN' : '';
+    $('#province-code').value = ''; $('#city-code').value = ''; $('#city-name').value = '';
+  };
   const setCoord = value => {
     $('#coordinate-system').value = value;
     $('#coord-seg').querySelectorAll('[data-coord]').forEach(button => button.classList.toggle('active', button.dataset.coord === value));
@@ -413,6 +423,7 @@ function locationDialog(member, loc = {}) {
     } else {
       $('#country-code').value = item.code; $('#province-code').value = ''; $('#city-code').value = '';
     }
+    placeSelected = true;
   };
   function setPoint(lng, lat) {
     if (!active()) return;
@@ -431,18 +442,21 @@ function locationDialog(member, loc = {}) {
         $('#city-code').value = cityKey(adcode.slice(2, 4) === '90' ? adcode : adcode.slice(0, 4) + '00', province);
         $('#city-name').value = municipalities.has(province) ? state.boot.provinces[province] : (Array.isArray(address.city) ? address.district : address.city) || address.district;
         $('#place-input').value = shortName($('#city-name').value);
+        placeSelected = true;
       });
     }
   }
   updateCountry();
   setCoord(loc.coordinate_system || $('#coordinate-system').value);
   const search = placeSearch($('#place-input'), $('#location-form .sugg'), {mode: () => mode, divisions: () => state.divisions,
-    countries: state.boot.countries || {}, provinces: state.boot.provinces || {}, onPick: item => {if (item) {clearPoint(); choosePlace(item);}}});
+    countries: state.boot.countries || {}, provinces: state.boot.provinces || {}, onPick: item => {
+      clearPoint();
+      if (item) choosePlace(item); else clearPlace();
+    }});
   $('#location-form').querySelectorAll('[data-mode]').forEach(button => button.onclick = () => {
-    mode = button.dataset.mode; clearPoint(); updateCountry(); search.redraw();
+    mode = button.dataset.mode; clearPoint(); clearPlace(); updateCountry();
     $('#location-form').querySelectorAll('[data-mode]').forEach(other => other.classList.toggle('on', other === button));
-    $('#place-input').value = ''; $('#city-name').value = ''; $('#city-code').value = ''; $('#province-code').value = '';
-    $('#country-code').value = mode === 'china' ? 'CHN' : '';
+    $('#place-input').value = ''; search.redraw();
   });
   $('#location-form').querySelectorAll('[data-date]').forEach(button => button.onclick = () => {
     const field = button.dataset.date, hidden = $(`#location-form [name="${field}"]`);
@@ -468,7 +482,7 @@ function locationDialog(member, loc = {}) {
     }, () => {if (active()) $('#point-status').textContent = '未能获取设备位置，可以直接在地图上选点。';}, {timeout: 15000, maximumAge: 0});
   };
   bindForm('#location-form', async data => {
-    if (!data.country_code) throw new Error('请先点选一个城市或国家');
+    if (!placeSelected || !data.country_code) throw new Error('请先点选一个城市或国家');
     data.close_previous = data.close_previous === 'on';
     if (isEdit) data.version = loc.version;
     await api(`members/${member.id}/locations${isEdit ? '/' + loc.id : ''}`, isEdit ? 'PATCH' : 'POST', data);
