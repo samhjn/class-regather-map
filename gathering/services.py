@@ -3,7 +3,7 @@ import hashlib
 import io
 import re
 import secrets
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth.hashers import make_password
@@ -52,6 +52,7 @@ def secret_text(data, key):
 def validate_member_password(password):
     # Member accounts are a lightweight class directory, separate from staff
     # credentials and the shared viewing password's Django validators.
+    # Keep a minimum length: short numeric passwords fit inside one login throttle window.
     if len(password) < 6:
         raise Problem('个人密码至少需要 6 位')
 
@@ -137,9 +138,27 @@ def lock_member(member):
     return Member.objects.select_for_update().get(pk=member.pk)
 
 
+def is_self(member, actor):
+    # An admin editing their own member record counts as self too.
+    return bool(actor and actor.is_authenticated and member.user_id == actor.pk)
+
+
+def apply_note(member, data):
+    """Save the personal note (Member.bio) in the caller's transaction, guarded by the version the
+    form was opened with. Only when the client sends member_version: imports never do."""
+    if 'member_version' not in data:
+        return
+    if data.get('member_version') != member.updated_at.isoformat():
+        raise Problem('个人备注已被更新，请重新打开再改', 409)
+    member.bio = string(data, 'bio', 240)
+    member.save(update_fields=['bio', 'updated_at'])
+
+
 @transaction.atomic
-def save_location(member, data, actor, location_id=None, check_version=True):
+def save_location(member, data, actor, location_id=None, check_version=True, confirm=True):
     member = lock_member(member)
+    if confirm and is_self(member, actor):
+        apply_note(member, data)
     values = location_values(data)
     existing = None
     if location_id:
@@ -165,9 +184,36 @@ def save_location(member, data, actor, location_id=None, check_version=True):
     for key, value in values.items():
         setattr(location, key, value)
     location.updated_by = actor
+    # Only the member saving their own stay confirms it; others' edits keep the previous value.
+    if confirm and is_self(member, actor):
+        location.confirmed_at = timezone.now()
+    elif not existing:
+        # Spec 5.7: a stay nobody self-confirmed counts as known on its start date.
+        location.confirmed_at = timezone.make_aware(datetime.combine(location.started_on, time.min))
     location.full_clean()
     location.save()
     audit(member.classroom, actor, 'location.update' if existing else 'location.create', member, location_id=location.pk)
+    return location
+
+
+@transaction.atomic
+def confirm_location(member, location_id, version, actor, data=None):
+    member = lock_member(member)
+    # Checked on the locked row so a concurrent claim reset cannot slip through.
+    if not is_self(member, actor):
+        raise Problem('只能确认自己的位置', 403)
+    location = member.locations.filter(pk=location_id).first()
+    if not location:
+        raise Problem('找不到这条足迹', 404)
+    if version != location.updated_at.isoformat():
+        raise Problem('记录已被更新，请刷新后再确认。', 409)
+    if location.ended_on and location.ended_on <= timezone.localdate():
+        raise Problem('这条位置已经结束')
+    apply_note(member, data or {})
+    # update() rather than save(): save() would bump updated_at (the edit version).
+    Location.objects.filter(pk=location.pk).update(confirmed_at=timezone.now())
+    audit(member.classroom, actor, 'location.confirm', member, location_id=location.pk)
+    location.refresh_from_db()
     return location
 
 
@@ -236,7 +282,7 @@ def import_rows(classroom, rows, actor, dry_run=False):
                     raise Problem('同一同学的到达日期重复')
                 seen.add(identity)
                 old = member.locations.filter(started_on=values['started_on']).first()
-                save_location(member, row, actor, old.pk if old else None, check_version=False)
+                save_location(member, row, actor, old.pk if old else None, check_version=False, confirm=False)
                 stays += 1
         except (Problem, ValidationError) as error:
             message = error.message if isinstance(error, Problem) else '; '.join(error.messages)

@@ -51,6 +51,9 @@ class Location(models.Model):
     note = models.CharField(max_length=500, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    # Last time the member themself said "this is still true". Unlike updated_at,
+    # admin edits and imports never touch it.
+    confirmed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['started_on', 'id']

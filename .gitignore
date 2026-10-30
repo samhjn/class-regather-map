@@ -7,3 +7,8 @@ staticfiles/
 artifacts/
 node_modules/
 .DS_Store
+
+# e2e
+e2e*.sqlite3
+test-results/
+playwright-report/

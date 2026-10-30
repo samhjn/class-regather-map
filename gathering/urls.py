@@ -9,6 +9,7 @@ urlpatterns = [
     path('api/members/<int:member_id>', views.member_detail),
     path('api/members/<int:member_id>/locations', views.location_create),
     path('api/members/<int:member_id>/locations/<int:location_id>', views.location_detail),
+    path('api/members/<int:member_id>/locations/<int:location_id>/confirm', views.location_confirm),
     path('api/admin/members/<int:member_id>/invite', views.invite),
     path('api/admin/import', views.roster_import), path('api/admin/settings', views.class_settings),
 ]

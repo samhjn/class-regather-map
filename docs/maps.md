@@ -4,8 +4,11 @@
 
 - 默认高德标准底图：由官方 SDK 请求和展示，保留原始地图标识。
 - 世界：`AMap.DistrictLayer.World`，国家编码使用供应商 SOC / ISO alpha-3 口径。
-- 中国：`AMap.DistrictLayer.Country({SOC: 'CHN', depth: 1})`，分省。
+- 中国：`AMap.DistrictLayer.Country({SOC: 'CHN', depth: 2})`，全国视图直接按地级市着色（2026-10-29 用真实 Key 在手机尺寸下验证可用）。
 - 省份：`AMap.DistrictLayer.Province({adcode: [code], depth: 1})`，分市。直辖市及港澳按本省级单位作为业务城市；若供应商没有提供细一级边界，仍可从列表查看业务记录。
+- 底图样式：`amap://styles/whitesmoke`（高德内置浅色样式），人数点为 HTML Marker，颜色只表达人数分档。
+- 人数点位置：有坐标时取该城市同学坐标的平均值；没有坐标时国内取一次 `DistrictSearch('中国', subdistrict: 2)` 返回的行政区中心，只填省份的记录在省会旁偏移一点；海外取 `country-centers.js` 中的国家中心点（由公有领域的国家轮廓数据离线计算，只保留点坐标，不绘制任何边界）。
+- 面板与地图：地图容器的底边随底部面板移动，高德的 logo、比例尺和审图号始终显示在面板上方，不移动、不隐藏供应商 DOM。
 - 点选：`getDistrictByContainerPos`；行政区查询：`AMap.DistrictSearch`。采用其有明确示例的 v1.4.15 API。并非所有 v2 文档都包含相同拾取接口，不做未经验证的直接升级。
 - 高德地图之外不加载其他瓦片或行政区矢量。代码不绘制国界或海上界线；不改写审图号，不伪造号段，也不隐藏供应商 logo / copyright DOM。
 

@@ -8,7 +8,7 @@
 
 所有业务路由为 `/c/{slug}/api/...`；客户端不能通过请求体自行指定班级或改写 user_id / is_admin。全站超级管理员可跨班访问，班级管理员严格限制在所属班级。审计记录包含班级、操作者、动作与目标 ID，不包含密码、认领码或位置完整副本。
 
-Location 包含国家、行政区代码、地点名、可选点位、坐标系、实际起止日期、备注、更新时间与更新者。区间是左闭右开，同一成员不允许重叠；数据更新时同时使用数据库行锁与基于 updated_at 的乐观版本检查。
+Location 包含国家、行政区代码、地点名、可选点位、坐标系、实际起止日期、备注、更新时间与更新者。`confirmed_at` 记录本人最后一次确认这条位置属实的时间：只有本人新建、修改或调用 confirm 接口时才刷新，导入与管理员代改不会改动它；迁移时，本人改过的记录回填为 updated_at，其余回填为 started_on 当天 00:00。区间是左闭右开，同一成员不允许重叠；数据更新时同时使用数据库行锁与基于 updated_at 的乐观版本检查。
 
 ## 导入字段
 
@@ -44,5 +44,7 @@ CSV 使用 UTF-8（支持 BOM），英文表头。JSON 为相同字段的行对�
 读接口：`bootstrap`（解锁状态）、`snapshot?at=YYYY-MM-DD`（班级日期快照）、`members/{id}`（资料与完整足迹）。
 
 写接口采用 JSON、同源 Cookie 会话及 `X-CSRFToken`。表单入口设置 CSRF Cookie，登录后 Cookie 旋转，前端每次请求重新读取。身份操作为 `unlock/login/logout/claim/password`；个人位置为 `members/{id}/locations` 和 `.../{location_id}`；管理员接口位于 `admin/`。
+
+`POST members/{id}/locations/{location_id}/confirm` 传入 `version`，仅本人可调用（管理员也不能代为确认），只能确认当前有效的位置，只更新 confirmed_at，不改变 version。本人新建 / 修改位置或确认时可同时传 `bio` 与打开表单时的 `member_version`，个人备注与位置在同一事务内保存，备注版本不符返回 409 并整体回滚。
 
 编辑个人资料传入旧 `updated_at` 作为 `version`；编辑或删除位置传入响应中的 `version`。版本冲突返回 409，不能静默覆盖。API 对非授权操作返回 403，不向公开页返回认领码哈希或他人登录编号。

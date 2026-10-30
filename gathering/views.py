@@ -19,8 +19,8 @@ from django.views.decorators.http import require_GET
 
 from .geography import PROVINCES, countries, country_name
 from .models import Classroom, Location, Member
-from .services import (Problem, audit, import_rows, issue_claim, lock_member, parse_date, parse_import,
-                       save_location, secret_text, string, throttle, validate_member_password)
+from .services import (Problem, audit, confirm_location, import_rows, issue_claim, lock_member, parse_date,
+                       parse_import, save_location, secret_text, string, throttle, validate_member_password)
 
 
 def csrf_failure(request, reason=''):
@@ -119,6 +119,7 @@ def location_json(location):
         'coordinate_system', 'started_on', 'ended_on', 'note')} | {
         'country_name': country_name(location.country_code), 'province_name': PROVINCES.get(location.province_code, ''),
         'updated_at': location.updated_at.isoformat(), 'version': location.updated_at.isoformat(),
+        'confirmed_at': timezone.localtime(location.confirmed_at).isoformat() if location.confirmed_at else None,
     }
 
 
@@ -288,6 +289,13 @@ def location_detail(request, classroom, data, member_id, location_id):
         location.delete()
         audit(classroom, request.user, 'location.delete', member, location_id=location_id)
     return {'ok': True}
+
+
+@endpoint(('POST',))
+def location_confirm(request, classroom, data, member_id, location_id):
+    # Not check_edit: admins may edit others' stays but never confirm them.
+    member = get_object_or_404(Member, pk=member_id, classroom=classroom)
+    return {'location': location_json(confirm_location(member, location_id, data.get('version'), request.user, data))}
 
 
 @endpoint(('POST',), access='admin')

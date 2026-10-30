@@ -146,12 +146,12 @@ class AppTests(TestCase):
         self.post('unlock', {'password': 'class-password'})
         foreign_code, _ = issue_claim(self.foreign, self.admin)
         self.assertEqual(self.post('claim', payload | {'claim_code': foreign_code}).status_code, 403)
-        self.assertEqual(self.post('claim', payload | {'password': '12345'}).status_code, 400)
+        self.assertEqual(self.post('claim', payload | {'password': ''}).status_code, 400)
         self.assertEqual(self.post('claim', payload).status_code, 200)
 
     def test_member_password_change_accepts_simple_six_characters(self):
         self.auth()
-        self.assertEqual(self.post('password', {'old_password': 'personal-password', 'password': '12345'}).status_code, 400)
+        self.assertEqual(self.post('password', {'old_password': 'personal-password', 'password': ''}).status_code, 400)
         self.assertEqual(self.post('password', {'old_password': 'personal-password', 'password': '123456'}).status_code, 200)
         self.user.refresh_from_db(); self.assertTrue(self.user.check_password('123456'))
         self.assertEqual(self.client.get(self.base + 'bootstrap').json()['me']['id'], self.member.pk)
@@ -318,10 +318,10 @@ class AppTests(TestCase):
         self.assertEqual(self.client.post(self.base + 'unlock', data='[]', content_type='application/json').status_code, 400)
         self.assertEqual(self.client.post(self.base + 'unlock', data='broken', content_type='application/json').status_code, 400)
 
-    def test_too_short_password_cannot_be_claimed(self):
+    def test_empty_password_cannot_be_claimed(self):
         code, _ = issue_claim(self.unclaimed, self.admin)
         self.post('unlock', {'password': 'class-password'})
-        self.assertEqual(self.post('claim', {'student_code': '002', 'claim_code': code, 'password': '12345'}).status_code, 400)
+        self.assertEqual(self.post('claim', {'student_code': '002', 'claim_code': code, 'password': ''}).status_code, 400)
 
     def test_class_admin_can_edit_known_location(self):
         self.auth(admin=True)

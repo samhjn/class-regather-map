@@ -2,48 +2,55 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#174e42">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#f4f3fb">
   <title>{{ classroom.name }} · 同窗蹭饭地图</title>
   <link rel="stylesheet" href="{% static 'gathering/style.css' %}">
   <script type="module" src="{% static 'gathering/app.js' %}"></script>
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="./" aria-label="班级地图首页"><span class="brand-mark">同</span><span>同窗<span class="brand-sub">RE:GATHER</span></span></a>
-    <span class="class-name" id="class-title">{{ classroom.name }}</span>
-    <nav id="account-nav" aria-label="账号"><button id="auth-open">认领 / 登录</button><a class="quiet-link" href="/admin/login/?next={{ request.path|urlencode }}">管理员</a></nav>
-  </header>
-  <main>
-    <section class="intro"><div><div class="eyebrow">好久不见，下次在哪见？</div><h1>一张地图，<span>把同学找回来。</span></h1><p id="class-description">看看大家落脚在哪座城，为下一次相聚留个坐标。</p></div><div id="overview" class="overview" aria-live="polite"></div></section>
-    <section id="gate" class="gate" hidden>
-      <div class="gate-icon" aria-hidden="true">⌂</div><div class="eyebrow">只属于我们班的地图</div><h2>同学，欢迎回来</h2><p>输入班级查看码，看看大家最近在哪里。</p>
-      <form id="unlock-form"><label>班级查看码<input name="password" type="password" required autocomplete="current-password" maxlength="200"></label><button class="primary" type="submit">打开班级地图 <span aria-hidden="true">→</span></button></form><p id="entry-hint" class="muted" role="status"></p><p class="muted">已认领的同学也可以直接登录个人账号。</p><button id="gate-login" class="text-button">登录个人账号</button>
-    </section>
-    <div id="workspace" hidden>
-      <section class="toolbar" aria-label="地图与历史视图">
-        <div class="segmented"><button data-level="world">世界</button><button data-level="china" class="active">中国</button><select id="province-view" aria-label="选择省份"><option value="">各省 / 市</option></select></div>
-        <div class="date-control"><span class="live-dot"></span><label for="snapshot-date" id="date-label">现在的我们</label><input type="date" id="snapshot-date"><button id="today-button" class="text-button">回到今天</button></div>
-      </section>
-      <div class="map-layout">
-        <aside class="directory">
-          <div class="directory-top"><div><div class="eyebrow">相聚索引</div><h2 id="directory-title">在中国的同学</h2></div><button id="clear-filter" class="text-button">全部</button></div>
-          <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="找同学、城市或一句近况" aria-label="搜索同学"></label>
-          <div id="region-list" class="regions" aria-label="地区列表"></div>
-          <div class="list-heading"><span id="member-count"></span><button id="unknown-button" class="text-button">未填位置</button></div>
-          <div id="member-list" class="member-list" aria-live="polite"></div>
-        </aside>
-        <section class="map-panel" aria-label="同学分布地图">
-          <div class="map-header"><div id="breadcrumbs" class="breadcrumbs"></div><span class="map-hint">点选行政区，查看同学</span></div>
-          <div id="map" class="map"></div><div id="map-status" class="map-status" role="status"></div>
-          <div class="map-footer"><span>● 同学所在地　<span class="light-dot">●</span> 人数越多，区域越深</span><button id="map-reset" class="text-button">重置视野 ↗</button></div>
-        </section>
-      </div>
-      <section class="time-strip"><span id="timeline-caption">把时间拨回那一天</span><input type="range" id="timeline" min="0" max="1" value="1" aria-label="历史日期时间轴"><span id="timeline-date"></span></section>
-      <footer><span>坐标会变，相聚有期。</span><span>位置由同学自行分享 · 不自动获取实时定位</span></footer>
+  <main id="gate" class="gate" hidden>
+    <div class="gate-card">
+      <p class="eyebrow">只属于我们班的地图</p>
+      <h1 id="class-title">{{ classroom.name }}</h1>
+      <p id="class-description">看看大家落脚在哪座城，为下一次相聚留个坐标。</p>
+      <form id="unlock-form"><label>班级查看码<input name="password" type="password" required autocomplete="current-password" maxlength="200"></label>
+        <button class="primary" type="submit">打开班级地图</button></form>
+      <p id="entry-hint" class="muted" role="status"></p>
+      <button id="gate-login" class="text-button" type="button">已认领的同学，登录个人账号</button>
     </div>
   </main>
-  <dialog id="modal"><div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" class="icon-button" aria-label="关闭窗口">×</button></div><div id="modal-body"></div></dialog>
+
+  <div id="app" hidden>
+    <div id="map" class="map" aria-label="同学分布地图"></div>
+    <p id="map-status" class="map-status" role="status" hidden></p>
+    <div class="top">
+      <div id="scope-seg" class="seg" role="group" aria-label="境内或境外">
+        <button type="button" data-scope="china" class="on" aria-pressed="true">境内<em id="count-china">0</em></button>
+        <button type="button" data-scope="world" aria-pressed="false">境外<em id="count-world">0</em></button>
+      </div>
+      <button id="me-btn" class="mebtn" type="button"><i aria-hidden="true">我</i>更新位置<span class="dot" hidden aria-label="位置很久没确认了"></span></button>
+    </div>
+    <button id="range-chip" class="fchip" type="button" hidden></button>
+    <button id="fit-all" class="fit-all" type="button" hidden>看全部</button>
+    <section id="sheet" class="sheet" data-detent="peek" aria-label="同学名单">
+      <button class="grab" data-drag type="button" aria-label="展开或收起名单" aria-expanded="false"></button>
+      <div id="sheet-body">
+        <div id="sheet-head" data-drag>
+          <div class="h2"><div><h2 id="sheet-title"></h2><p id="sheet-summary" class="s"></p><p id="unplaced" class="s" role="status" hidden></p></div>
+            <button id="region-close" class="x" type="button" aria-label="回到全部同学" hidden><i aria-hidden="true">×</i></button></div>
+          <div id="peek-end"></div>
+          <div id="range"></div>
+          <div id="legend" class="legend" aria-hidden="true">人数 <i style="background:#d4ccff"></i>1 <i style="background:#a898ff"></i>2–3 <i style="background:#7a63ff"></i>4–9 <i style="background:#4b3bea"></i>10+</div>
+          <nav id="account" class="account" aria-label="账号"></nav>
+        </div>
+        <label id="search-box" class="search"><span class="visually-hidden">找同学</span><input id="search" type="search" placeholder="找同学、城市或一句近况" autocomplete="off"></label>
+        <div id="list"></div>
+      </div>
+    </section>
+  </div>
+
+  <dialog id="modal"><div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" class="icon-button" type="button" aria-label="关闭窗口">×</button></div><div id="modal-body"></div></dialog>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <noscript>本应用需要 JavaScript 才能显示地图和编辑位置。</noscript>
 </body>

@@ -1,12 +1,17 @@
-import {cityKey, createMemberOrder, dayNumber, dayString, municipalities, placeName, regionCounts, scopeMembers} from './logic.js';
-import {ClassMap, createFootprintMap, districtChildren, loadMap} from './map.js';
+import {cityKey, createMemberOrder, municipalities, placeName} from './logic.js';
+import {ClassMap, chinaDivisions, createFootprintMap, loadMap} from './map.js';
+import {REGIONS, consistentCounts, inRange, isStale, levelOf, memberKey, presetRange, splitForRegion} from './filter.js';
+import {createSheet} from './sheet.js';
+import {monthLabel, mountRange} from './range.js';
+import {matches, memberRow, otherGroup, placeOf, regionTitle, section, sectionTitle, shortName} from './views.js';
+import {closeUpdate, placeSearch, renderUpdate} from './update.js';
+import {dayPicker} from './pickers.js';
 import {buildEntryLink, readEntryLink} from './links.js';
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const options = (items, selected = '') => Object.entries(items).map(([value, name]) => `<option value="${escape(value)}" ${value === selected ? 'selected' : ''}>${escape(name)}</option>`).join('');
-const state = {level: 'china', province: '', selected: '', selectedName: '', unknown: false, search: '', members: [], at: '', boot: null};
-let map, modalMap, snapshotRequest = 0, toastTimer, modalGeneration = 0;
+const state = {scope: 'china', view: {type: 'home'}, search: '', range: null, preset: '3y', earliest: '', members: [], boot: null};
+let map, sheet, rangeControl, footprintMap, memberTicket = 0, updateTicket = 0, modalMap, snapshotRequest = 0, toastTimer, modalGeneration = 0;
 const apiRoot = new URL('api/', location.href);
 const orderMembers = createMemberOrder();
 const entryLink = readEntryLink(location.href);
@@ -22,7 +27,7 @@ async function api(path, method = 'GET', data) {
     ...(data === undefined ? {} : {body: JSON.stringify(data)})});
   let result;
   try {result = await response.json();} catch {throw new Error('服务暂时不可用，请稍后重试。');}
-  if (!response.ok) throw new Error(result.error || '请求失败，请刷新重试。');
+  if (!response.ok) throw Object.assign(new Error(result.error || '请求失败，请刷新重试。'), {status: response.status});
   return result;
 }
 function notify(message, error = false) {
@@ -49,97 +54,195 @@ function bindForm(selector, handler) {
   });
 }
 
+// Account links (my footprint, password, admin, login, logout); shown in the home sheet
+// header and again at the bottom of the 我 page so they are easy to find.
+function renderAccount(container) {
+  const boot = state.boot;
+  container.innerHTML = `${boot.me ? '<button data-act="profile" class="text-button" type="button">我的足迹</button><button data-act="password" class="text-button" type="button">改密码</button>' : '<button data-act="login" class="text-button" type="button">认领 / 登录</button>'}
+    ${boot.is_admin ? '<button data-act="admin" class="text-button" type="button">班级管理</button>' : `<a class="quiet-link" href="/admin/login/?next=${encodeURIComponent(location.pathname)}">管理员</a>`}
+    ${boot.authenticated || boot.unlocked && boot.has_password ? '<button data-act="logout" class="text-button" type="button">退出</button>' : ''}`;
+  const actions = {profile: () => run(() => memberDialog(boot.me.id)), password: passwordDialog, admin: () => run(adminDialog), login: () => authDialog('login'),
+    logout: () => run(async () => {await api('logout', 'POST', {}); location.reload();})};
+  container.querySelectorAll('[data-act]').forEach(button => button.onclick = actions[button.dataset.act]);
+}
 async function boot() {
   state.boot = await api('bootstrap');
   const boot = state.boot;
   $('#class-title').textContent = boot.classroom.name;
   $('#class-description').textContent = boot.classroom.description || '看看大家落脚在哪座城，为下一次相聚留个坐标。';
-  $('#gate').hidden = boot.unlocked; $('#workspace').hidden = !boot.unlocked;
-  $('#account-nav').innerHTML = `${boot.me ? `<button id="my-profile">${escape(boot.me.name)} · 我的足迹</button><button id="my-password" class="text-button">改密码</button>` : '<button id="auth-open">认领 / 登录</button>'}
-    ${boot.is_admin ? '<button id="admin-open">班级管理</button>' : `<a class="quiet-link" href="/admin/login/?next=${encodeURIComponent(location.pathname)}">管理员</a>`}
-    ${boot.authenticated || boot.unlocked && boot.has_password ? '<button id="logout" class="text-button">退出</button>' : ''}`;
-  $('#auth-open')?.addEventListener('click', () => authDialog('login'));
-  $('#my-profile')?.addEventListener('click', () => run(() => memberDialog(boot.me.id)));
-  $('#my-password')?.addEventListener('click', passwordDialog);
-  $('#admin-open')?.addEventListener('click', () => run(adminDialog));
-  $('#logout')?.addEventListener('click', () => run(async () => {await api('logout', 'POST', {}); location.reload();}));
+  $('#gate').hidden = boot.unlocked; $('#app').hidden = !boot.unlocked;
+  renderAccount($('#account'));
   if (!boot.unlocked) {
-    $('#overview').textContent = '';
     $('#entry-hint').textContent = pendingClaim ? '认领信息已填好，请先输入查看码打开地图。' : entry.view_code ? '查看码已填好，点击打开班级地图即可。' : '';
     return;
   }
   $('#unlock-form [name="password"]').value = ''; entry.view_code = '';
   if (pendingClaim && !boot.me) {pendingClaim = false; authDialog('claim');}
-  $('#province-view').innerHTML = '<option value="">各省 / 市</option>' + options(boot.provinces, state.province);
-  state.at ||= boot.today; $('#snapshot-date').max = boot.today; $('#snapshot-date').value = state.at;
+  // The map ends where the sheet begins, so AMap's logo, scale and review number stay
+  // visible above it (they are never moved or hidden).
+  sheet ||= createSheet($('#sheet'), {stops: sheetStops, openTo: () => wide.matches ? 'full' : 'half', onChange: (detent, height) => {
+    $('#app').dataset.detent = detent;
+    // Phones: the map ends where the sheet begins. Wide screens: the panel floats on the right.
+    $('#app').style.setProperty('--map-bottom', wide.matches ? '0px' : `${detent === 'full' ? sheetStops().peek : height}px`);
+    map?.setRightInset(wide.matches && detent !== 'peek' ? $('#sheet').offsetWidth + 16 : 0);
+    // The visible map just changed size: re-frame the home view so no dot ends up under the
+    // sheet or off screen — unless the user has already taken over the map.
+    if (map && state.view.type === 'home' && !map.userMoved) setTimeout(() => map.fit(), 60);
+    renderSheet();
+  }});
   await refresh();
+  sheet.snap('peek', false);
   if (!map) {
     $('#map-status').hidden = false; $('#map-status').textContent = '正在载入地图…';
     try {
       const A = await loadMap(boot.map);
-      if (!map) map = new ClassMap(A, 'map', pickRegion, people => run(() => people.length === 1 ? memberDialog(people[0].id) : markerPeopleDialog(people)));
-      $('#map-status').hidden = true; render();
+      state.A = A;
+      // One DistrictSearch for dot positions and the city search; retried if it fails.
+      const loadDivisions = () => {
+        const request = chinaDivisions(A);
+        request.then(loaded => {state.divisions = loaded;}, () => setTimeout(() => map?.setDivisions(loadDivisions()), 5000));
+        return request;
+      };
+      map ||= new ClassMap(A, 'map', {divisions: loadDivisions(), onPick: openRegion, onClusterPick: () => {},
+        onBlank: () => {if (sheet.detent !== 'peek') sheet.snap('peek');},
+        onUserMoved: () => {$('#fit-all').hidden = false;},
+        onUnplaced: n => {$('#unplaced').hidden = !n; $('#unplaced').textContent = n ? `地图上暂时少画了 ${n} 人，名单是完整的` : '';}});
+      $('#map-status').hidden = true;
+      render();
+      map.fit();
     } catch (error) {$('#map-status').textContent = error.message;}
   }
 }
+// Sheet stops: the closed sheet is a slim bar (title + one line); half is ~55% of the screen.
+function sheetStops() {
+  const sheetTop = $('#sheet').getBoundingClientRect().top;
+  const peek = Math.round($('#peek-end').getBoundingClientRect().top - sheetTop + 10);
+  const full = $('#sheet').offsetHeight;
+  return {peek, half: Math.min(full - 80, Math.max(Math.round(innerHeight * 0.55), peek + 160)), full};
+}
+const wide = matchMedia('(min-width: 720px)');
 async function refresh() {
   const request = ++snapshotRequest;
-  const result = await api(`snapshot?at=${encodeURIComponent(state.at)}`);
+  const result = await api('snapshot');
   if (request !== snapshotRequest) return;
   state.members = orderMembers(result.members);
-  state.timelineStart = result.timeline_start || state.boot.today;
+  const confirmed = state.members.map(member => member.location?.confirmed_at).filter(Boolean).sort();
+  state.earliest = confirmed[0]?.slice(0, 10) || state.boot.today;
+  if (!state.range) {
+    state.range = presetRange('3y', state.boot.today, state.earliest);
+    rangeControl = mountRange($('#range'), {today: state.boot.today, earliest: state.earliest, range: state.range, preset: state.preset,
+      onChange: (range, preset) => {state.range = range; state.preset = preset; render();}});
+  }
   render();
 }
-function setLevel(level, province = '') {
-  Object.assign(state, {level, province, selected: '', selectedName: '', unknown: false});
-  $('#province-view').value = province; render();
+function rangeLabel() {
+  const names = {'1y': '近 1 年', '3y': '近 3 年', all: '全部时间里'};
+  if (state.preset) return names[state.preset] + ' ';
+  return `${monthLabel(state.range.from)}–${state.range.to === null ? '今天' : monthLabel(state.range.to)} `;
 }
-function pickRegion(key, name = '') {
-  state.unknown = false;
-  if (state.level === 'world' && key === 'CHN') setLevel('china');
-  else if (state.level === 'china' && state.boot.provinces[key]) setLevel('province', key);
-  else {state.selected = key; state.selectedName = name; render();}
+function setScope(scope) {
+  closeUpdate();
+  $('#fit-all').hidden = true;
+  state.scope = scope; state.view = {type: 'home'};
+  render(); sheet.snap('peek'); map?.fit();
+}
+function openRegion(key, level) {
+  closeUpdate();
+  state.view = {type: 'region', key, level};
+  render(); sheet.snap('half');
+  map?.focus(key);  // after the snap, so the dot lands in the middle of the visible map
+}
+function goHome() {
+  closeUpdate();
+  footprintMap?.destroy(); footprintMap = null;
+  state.view = {type: 'home'};
+  render(); sheet.snap('peek');
+}
+function regionName(key, level) {
+  const loc = state.members.find(member => member.location && levelOf(member.location) === level && memberKey(member.location, level) === key)?.location;
+  return placeOf(loc) || key;
 }
 function render() {
-  const located = state.members.filter(member => member.location);
-  const countries = new Set(located.map(member => member.location.country_code));
-  const cities = new Set(located.map(member => `${member.location.country_code}:${member.location.city_code || member.location.city_name || member.location.province_code}`));
-  $('#overview').innerHTML = `<div><strong>${state.members.length}</strong><span>位同学</span></div><div><strong>${countries.size}</strong><span>个国家</span></div><div><strong>${cities.size}</strong><span>处落脚地</span></div>`;
-  $('#date-label').textContent = state.at === state.boot.today ? '现在的我们' : '那时的我们';
-  $('.live-dot').classList.toggle('history', state.at !== state.boot.today);
-  $('#snapshot-date').value = state.at;
-  document.querySelectorAll('[data-level]').forEach(button => {button.classList.toggle('active', button.dataset.level === state.level); button.setAttribute('aria-pressed', String(button.dataset.level === state.level));});
-  const scopeName = state.level === 'world' ? '世界' : state.level === 'china' ? '中国' : state.boot.provinces[state.province];
-  const regionName = state.selectedName || (state.level === 'world' ? state.boot.countries[state.selected] : '') || scopeName;
-  $('#directory-title').textContent = state.unknown ? '还没留下坐标的同学' : `在${regionName}的同学`;
-  $('#breadcrumbs').innerHTML = `<button data-nav="world">世界</button>${state.level !== 'world' ? '<span>/</span><button data-nav="china">中国</button>' : ''}${state.level === 'province' ? `<span>/</span><strong>${escape(scopeName)}</strong>` : ''}${state.selected ? `<span>/</span><strong>${escape(regionName)}</strong>` : ''}`;
-  $('#breadcrumbs').querySelectorAll('button').forEach(button => button.onclick = () => setLevel(button.dataset.nav));
-  const counts = regionCounts(state.members, state);
-  let regions = state.level === 'china' ? Object.entries(state.boot.provinces) : [...counts.keys()].map(key => [key, state.level === 'world' ? state.boot.countries[key] : state.members.find(member => member.location?.city_code === key)?.location.city_name || '城市未填写']);
-  regions.sort((a, b) => (counts.get(b[0]) || 0) - (counts.get(a[0]) || 0) || a[1].localeCompare(b[1], 'zh-CN'));
-  $('#region-list').innerHTML = regions.map(([key, name]) => `<button class="region ${state.selected === key ? 'selected' : ''}" data-region="${escape(key)}" data-name="${escape(name)}"><span>${escape(name)}</span><b>${counts.get(key) || 0}</b></button>`).join('') || '<p class="empty-small">这个区域还没有位置记录。</p>';
-  $('#region-list').querySelectorAll('button').forEach(button => button.onclick = () => pickRegion(button.dataset.region, button.dataset.name));
-  const members = scopeMembers(state.members, state);
-  $('#member-count').textContent = `${members.length} 位同学${state.at !== state.boot.today ? ' · 历史位置' : ''}`;
-  $('#unknown-button').textContent = `未填位置 ${state.members.length - located.length}`;
-  $('#unknown-button').classList.toggle('selected', state.unknown);
-  $('#member-list').innerHTML = members.map(member => `<button class="member-card" data-member="${member.id}"><span class="avatar tone-${member.id % 4}">${escape(member.name.slice(0, 1))}</span><span class="member-info"><span class="member-name">${escape(member.name)}${state.boot.me?.id === member.id ? '<small>我</small>' : ''}</span><span class="member-place">${escape(placeName(member.location))}</span><span class="member-note">${escape(member.location?.note || member.bio || '下次见面，一起吃饭。')}</span></span><span class="chevron" aria-hidden="true">›</span></button>`).join('') || '<div class="empty"><span>⌂</span><p>这里暂时还没有同学</p><small>换个地区或日期再看看。</small></div>';
-  $('#member-list').querySelectorAll('button').forEach(button => button.onclick = () => run(() => memberDialog(Number(button.dataset.member))));
-  const min = dayNumber(state.timelineStart), max = dayNumber(state.boot.today);
-  $('#timeline').min = Math.min(min, dayNumber(state.at)); $('#timeline').max = max; $('#timeline').value = dayNumber(state.at); $('#timeline').disabled = min === max;
-  $('#timeline-caption').textContent = `${state.timelineStart} 起的班级足迹`; $('#timeline-date').textContent = state.at;
-  map?.update(state, state.members);
+  const counts = consistentCounts(state.members, state.range);
+  $('#count-china').textContent = counts.china; $('#count-world').textContent = counts.world;
+  document.querySelectorAll('[data-scope]').forEach(button => {button.classList.toggle('on', button.dataset.scope === state.scope); button.setAttribute('aria-pressed', String(button.dataset.scope === state.scope));});
+  const me = state.boot.me && state.members.find(member => member.id === state.boot.me.id);
+  $('#me-btn .dot').hidden = !state.boot.me || !isStale(me?.location?.confirmed_at, state.boot.today);
+  map?.setLevel(state.scope);
+  map?.update(state.members, state.range);
+  map?.select(state.view.type === 'region' ? state.view.key : null);
+  const to = state.range.to === null ? '今天' : monthLabel(state.range.to);
+  $('#range-chip').innerHTML = `确认时间 ${monthLabel(state.range.from)} – ${to}<u>修改</u>`;
+  $('#range-chip').hidden = state.view.type === 'home';
+  renderSheet();
 }
-function markerPeopleDialog(people) {
-  openModal(`附近的 ${people.length} 位同学`, `<p class="muted">放大地图可展开附近点位。</p><div class="simple-list">${people.map(person => `<button data-id="${person.id}">${escape(person.name)} <span>查看足迹 →</span></button>`).join('')}</div>`);
-  $('#modal-body').querySelectorAll('button').forEach(button => button.onclick = () => run(() => memberDialog(Number(button.dataset.id))));
+const rows = (list, options = {}) => list.map(member => memberRow(member, state.range, {...options, meId: state.boot.me?.id})).join('');
+const moreRow = (text, note) => `<button type="button" class="more" data-more>${text}<span>${note}</span></button>`;
+function renderSheet() {
+  if (state.view.type === 'member' || state.view.type === 'update') return;
+  const home = state.view.type === 'home', full = sheet?.detent === 'full';
+  $('#range').hidden = !home; $('#legend').hidden = !home; $('#region-close').hidden = home; $('#account').hidden = !home;
+  const counts = consistentCounts(state.members, state.range);
+  let html;
+  $('#search-box').hidden = !home;
+  if (home && state.search.trim()) {
+    // Search covers everyone — any scope, any confirm time, no location yet — so nobody is unreachable.
+    const found = state.members.filter(member => matches(member, state.search.trim()));
+    $('#list').innerHTML = section('搜索结果', found.length) + (rows(found, {showPlace: true}) || '<p class="empty-small">没有找到。</p>');
+    return;
+  }
+  if (home) {
+    // Everything on the home sheet is the current scope (境内 or 境外), same as the map.
+    const shown = counts[state.scope];
+    $('#sheet-title').textContent = `${shown} 位同学`;
+    const missing = state.members.filter(member => !member.location).length;
+    $('#sheet-summary').textContent = `${rangeLabel()}确认过位置 · 全班 ${state.members.length} 人${missing ? ` · 另有 ${missing} 人未填位置` : ''}`;
+    if (!shown) html = '<div id="empty" class="empty"><p>这个时间段还没有同学确认过位置</p><button id="expand-range" class="secondary" type="button">扩大时间范围</button></div>';
+    else if (state.scope === 'world') html = countryGroups(full);
+    else {
+      const {inRange: fresh, others} = splitForRegion(state.members, null, 'china', state.range);
+      const other = otherGroup(state.range.to === null);
+      html = full ? section(sectionTitle(true), fresh.length) + rows(fresh, {showPlace: true}) + (others.length ? section(other.title, others.length, other.note) + rows(others, {showPlace: true}) : '')
+          + unplacedGroup()
+        : section('最近更新', fresh.length) + rows(fresh.slice(0, 3), {showPlace: true}) + (fresh.length > 3 || others.length ? moreRow('展开全部', `还有 ${Math.max(0, fresh.length - 3)} 人`) : '');
+    }
+  } else {
+    const {key, level} = state.view;
+    const name = regionName(key, level);
+    const {inRange: fresh, others} = splitForRegion(state.members, key, level, state.range);
+    $('#sheet-title').textContent = regionTitle(name, fresh.length);
+    $('#sheet-summary').textContent = '这段时间确认过位置';
+    const toToday = state.range.to === null;
+    const otherNote = `另有 ${others.length} 条${toToday ? '更早的记录' : '不在这段时间里的记录'}`;
+    const other = otherGroup(toToday, escape(name));
+    html = full ? section(sectionTitle(true), fresh.length) + rows(fresh) + (others.length ? section(other.title, others.length, other.note) + rows(others) : '')
+      : rows(fresh.slice(0, 3)) + (fresh.length > 3 || others.length ? moreRow('展开全部', `还有 ${Math.max(0, fresh.length - 3)} 人，${otherNote}`) : '');
+  }
+  $('#list').innerHTML = html;
+}
+function unplacedGroup() {
+  const unplaced = state.members.filter(member => !member.location);
+  return unplaced.length ? section('还没填位置', unplaced.length) + rows(unplaced) : '';
+}
+function countryGroups(full) {
+  const {inRange: fresh, others} = splitForRegion(state.members, null, 'world', state.range);
+  const groups = new Map();
+  for (const member of fresh) {
+    const name = placeOf(member.location);
+    groups.set(name, [...(groups.get(name) || []), member]);
+  }
+  const other = otherGroup(state.range.to === null);
+  const truncated = [...groups.values()].some(list => list.length > 3);
+  return [...groups].map(([name, list]) => section(escape(name), list.length) + rows(full ? list : list.slice(0, 3))).join('')
+    + (full ? (others.length ? section(other.title, others.length, other.note) + rows(others, {showPlace: true}) : '') + unplacedGroup()
+      : (truncated || others.length ? moreRow('展开全部', others.length ? `另有 ${others.length} 条${other.title}` : '') : ''));
 }
 function authDialog(mode, draft = entry, useCode = !draft.name && !!draft.student_code) {
   const claim = mode === 'claim';
   openModal(claim ? '认领我的身份' : '同学，欢迎回来', `<div class="segmented auth-tabs"><button id="tab-login" class="${claim ? '' : 'active'}">个人登录</button><button id="tab-claim" class="${claim ? 'active' : ''}">首次认领</button></div>
-    <p class="muted">${claim ? '填写姓名和管理员发给你的一次性认领码，再设置自己的密码。个人密码至少 6 位，无需混合字母、数字或符号。' : '使用名单中的姓名和自己设置的密码登录。'}</p>
+    <p class="muted">${claim ? '填写姓名和管理员发给你的一次性认领码，再设置自己的密码。个人密码至少 6 位，允许纯数字，无需混合字母或符号。' : '使用名单中的姓名和自己设置的密码登录。'}</p>
     <form id="auth-form"><label>${useCode ? '班级编号' : '姓名'}<input name="${useCode ? 'student_code' : 'name'}" value="${escape(useCode ? draft.student_code : draft.name)}" autocomplete="username" maxlength="${useCode ? 64 : 60}" required></label>${claim ? `<label>一次性认领码<input name="claim_code" value="${escape(draft.claim_code)}" autocomplete="off" maxlength="200" required></label>` : ''}
-    <label>${claim ? '设置个人密码（至少 6 位）' : '个人密码'}<input name="password" type="password" autocomplete="${claim ? 'new-password' : 'current-password'}" maxlength="200" ${claim ? 'minlength="6"' : ''} required></label>
+    <label>${claim ? '设置个人密码（至少 6 位）' : '个人密码'}<input name="password" type="password" autocomplete="${claim ? 'new-password' : 'current-password'}" ${claim ? 'minlength="6"' : ''} maxlength="200" required></label>
     ${claim && !state.boot.unlocked ? '<p class="form-error">认领前请先关闭窗口，输入班级查看码。</p>' : ''}<button type="submit" class="primary" ${claim && !state.boot.unlocked ? 'disabled' : ''}>${claim ? '认领并进入' : '登录'}</button></form>
     <details><summary>同名或使用原来的班级编号</summary><p class="muted">同名同学可凭各自的认领码认领；登录时请使用管理员提供的班级编号。</p><button id="identity-toggle" class="text-button">${useCode ? '改用姓名' : '使用班级编号'}</button></details><p class="muted">忘记个人密码可联系管理员重新发放认领码。</p>`);
   const remember = () => {
@@ -164,25 +267,95 @@ function passwordDialog() {
   openModal('修改个人密码', `<form id="password-form"><label>原密码<input type="password" name="old_password" autocomplete="current-password" required></label><label>新密码（至少 ${minimum} 位）<input type="password" name="password" autocomplete="new-password" minlength="${minimum}" maxlength="200" required></label><button class="primary" type="submit">保存新密码</button></form>`);
   bindForm('#password-form', async data => {await api('password', 'POST', data); closeModal(); notify('个人密码已更新，其他设备需要重新登录。');});
 }
+// Member detail lives in the sheet (full height) instead of a modal.
 async function memberDialog(id) {
+  closeModal(); closeUpdate();
+  // A newer tap wins: an older request that lands late must not build a second footprint map.
+  const ticket = ++memberTicket;
   const detail = await api(`members/${id}`), member = detail.member;
+  if (ticket !== memberTicket) return;
   const chronological = detail.locations;
-  openModal(`${member.name}的足迹`, `<div class="profile-summary"><span class="avatar large tone-${member.id % 4}">${escape(member.name.slice(0, 1))}</span><div><h3>${escape(member.name)}</h3><p>${escape(member.bio || '下次路过，记得约一顿饭。')}</p><small>${detail.locations.length} 段足迹</small></div></div>
-    ${detail.editable ? '<div class="actions"><button id="add-location" class="primary">＋ 更新位置 / 补录历史</button><button id="edit-profile">编辑资料</button></div>' : ''}
-    <div id="footprint-map" class="mini-map"><p class="map-inline-status">正在加载足迹地图…</p></div><p class="muted small">编号按时间排序；连线表示足迹顺序，不代表实际行程。没有坐标的记录仍显示在下方。</p>
-    <div class="footprint-list">${[...chronological].reverse().map((loc, i) => `<article class="footprint"><span class="step">${chronological.length - i}</span><div><h3>${escape(placeName(loc))}</h3><div class="stay-date">${loc.started_on} → ${loc.ended_on || '至今'}${loc.ended_on ? '（离开当天起不计入）' : ''}</div><p>${escape(loc.note)}</p><small>资料更新于 ${escape(new Date(loc.updated_at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}))}</small>${detail.editable ? `<div class="record-actions"><button class="text-button" data-edit="${loc.id}">编辑</button><button class="text-button danger" data-delete="${loc.id}">删除</button></div>` : ''}</div></article>`).join('') || '<p class="empty-small">还没有足迹，留下第一个坐标吧。</p>'}</div>`, true);
-  const generation = modalGeneration;
+  const back = state.view.type === 'member' ? state.view.back : state.view;
+  state.view = {type: 'member', id, back};
+  footprintMap?.destroy(); footprintMap = null;
+  $('#range').hidden = true; $('#legend').hidden = true; $('#region-close').hidden = false; $('#account').hidden = true; $('#search-box').hidden = true;
+  $('#sheet-title').textContent = member.name;
+  $('#sheet-summary').textContent = member.bio || '下次路过，记得约一顿饭。';
+  $('#list').innerHTML = `<div id="member-detail"><h2 class="sec">足迹 · ${chronological.length} 段</h2>
+    ${detail.editable ? '<div class="actions"><button id="add-location" class="text-button" type="button">＋ 更新位置 / 补录历史</button><button id="edit-profile" class="text-button" type="button">编辑资料</button></div>' : ''}
+    <div id="footprint-map" class="mini-map"><p class="map-inline-status">正在加载足迹地图…</p></div><p class="muted small">编号按时间排序；连线表示足迹顺序，不代表实际行程。</p>
+    <div class="footprint-list">${[...chronological].reverse().map((loc, i) => `<article class="footprint"><span class="step">${chronological.length - i}</span><div><h3>${escape(placeName(loc))}</h3><div class="stay-date">${loc.started_on} → ${loc.ended_on || '至今'}${loc.ended_on ? '（离开当天起不计入）' : ''}</div>${loc.note ? `<p class="member-note">${escape(loc.note)}</p>` : ''}<small class="stay-date">资料更新于 ${escape(new Date(loc.updated_at).toLocaleDateString('zh-CN'))}</small>${detail.editable ? `<div class="record-actions"><button class="text-button" type="button" data-edit="${loc.id}">编辑</button><button class="text-button danger" type="button" data-delete="${loc.id}">删除</button></div>` : ''}</div></article>`).join('') || '<p class="empty-small">还没有留下足迹。</p>'}</div></div>`;
+  sheet.snap('full');
   $('#add-location')?.addEventListener('click', () => locationDialog(member));
   $('#edit-profile')?.addEventListener('click', () => profileDialog(member));
-  $('#modal-body').querySelectorAll('[data-edit]').forEach(button => button.onclick = () => locationDialog(member, detail.locations.find(loc => loc.id === Number(button.dataset.edit))));
-  $('#modal-body').querySelectorAll('[data-delete]').forEach(button => button.onclick = () => {
+  $('#list').querySelectorAll('[data-edit]').forEach(button => button.onclick = () => locationDialog(member, detail.locations.find(loc => loc.id === Number(button.dataset.edit))));
+  $('#list').querySelectorAll('[data-delete]').forEach(button => button.onclick = () => {
     const loc = detail.locations.find(loc => loc.id === Number(button.dataset.delete));
-    openModal('删除这段足迹？', `<p>${escape(placeName(loc))} · ${loc.started_on}</p><p class="muted">这段记录会从当前与历史地图中移除。其他记录的日期不会自动延长。</p><div class="actions"><button id="delete-confirm" class="danger-button">确认删除</button><button id="delete-cancel">取消</button></div>`);
-    $('#delete-cancel').onclick = () => run(() => memberDialog(id));
+    openModal('删除这段足迹？', `<p>${escape(placeName(loc))} · ${loc.started_on}</p><p class="muted">这段记录会从地图中移除。其他记录的日期不会自动延长。</p><div class="actions"><button id="delete-confirm" class="danger-button" type="button">确认删除</button><button id="delete-cancel" class="text-button" type="button">取消</button></div>`);
+    $('#delete-cancel').onclick = closeModal;
     $('#delete-confirm').onclick = () => run(async () => {await api(`members/${id}/locations/${loc.id}`, 'DELETE', {version: loc.version}); await refresh(); await memberDialog(id); notify('足迹已删除');});
   });
-  try {const A = await loadMap(state.boot.map); if (generation === modalGeneration && $('#modal').open) modalMap = createFootprintMap(A, 'footprint-map', chronological);}
-  catch (error) {if (generation === modalGeneration) $('#footprint-map').textContent = error.message;}
+  try {
+    const A = await loadMap(state.boot.map);
+    if (ticket === memberTicket && state.view.type === 'member' && state.view.id === id) footprintMap = createFootprintMap(A, 'footprint-map', chronological);
+  } catch (error) {if (state.view.id === id) $('#footprint-map').textContent = error.message;}
+}
+async function openUpdate() {
+  const me = state.boot.me;
+  const current = state.members.find(member => member.id === me.id)?.location || null;
+  const back = state.view.type === 'update' ? state.view.back : state.view;
+  footprintMap?.destroy(); footprintMap = null;
+  state.view = {type: 'update', back};
+  $('#range').hidden = true; $('#legend').hidden = true; $('#account').hidden = true; $('#region-close').hidden = false; $('#search-box').hidden = true;
+  $('#range-chip').hidden = true;
+  $('#sheet-title').textContent = '更新我的位置';
+  $('#sheet-summary').textContent = '';
+  $('#list').innerHTML = '<div id="update"></div><nav id="update-account" class="account" aria-label="账号"></nav>';
+  renderAccount($('#update-account'));
+  sheet.snap('full');
+  // The note's version is taken when the form opens: a note changed elsewhere meanwhile is a conflict, not an overwrite.
+  const ticket = ++updateTicket;
+  const {member: mine} = await api(`members/${me.id}`);
+  // A newer tap on 我 (or leaving the page) wins: a late response must not wipe a draft.
+  if (ticket !== updateTicket || state.view.type !== 'update' || !$('#update')) return;
+  renderUpdate($('#update'), {me, current, bio: mine.bio || '', memberVersion: mine.updated_at, today: state.boot.today, api, notify, countries: state.boot.countries || {}, provinces: state.boot.provinces || {},
+    divisions: () => state.divisions, locate: locateCity,
+    todayInRange: () => inRange(`${state.boot.today}T12:00:00+08:00`, state.range),
+    onDone: async () => {closeUpdate(); await refresh(); goHome();},
+    onStale: () => run(async () => {await refresh(); await openUpdate();}),
+    onNotMe: () => run(async () => {await api('logout', 'POST', {}); goHome(); await boot(); authDialog('login');})});
+}
+// Device location → GCJ-02 → reverse geocode → prefecture city from the division list.
+function locateCity() {
+  return new Promise((resolve, reject) => {
+    const A = state.A;
+    if (!navigator.geolocation || !A) {reject(new Error('当前浏览器不支持设备定位，请直接输入城市。')); return;}
+    navigator.geolocation.getCurrentPosition(position => {
+      A.convertFrom([position.coords.longitude, position.coords.latitude], 'gps', (status, result) => {
+        if (status !== 'complete' || !result.locations?.length) {reject(new Error('定位转换失败，请直接输入城市。')); return;}
+        const point = result.locations[0];
+        new A.Geocoder().getAddress([point.lng, point.lat], (geoStatus, geo) => {
+          const adcode = geo?.regeocode?.addressComponent?.adcode;
+          if (geoStatus !== 'complete' || !adcode) {reject(new Error('没能识别所在城市，请直接输入。')); return;}
+          const province = adcode.slice(0, 2) + '0000';
+          resolve(state.divisions?.cities.get(municipalities.has(province) ? province : adcode.slice(0, 4) + '00') || null);
+        });
+      });
+    }, () => reject(new Error('未能获取设备位置，请直接输入城市。')), {timeout: 15000, maximumAge: 0});
+  });
+}
+function leaveUpdate() {
+  closeUpdate();
+  const back = state.view.back || {type: 'home'};
+  // A member detail is not part of render(): rebuild it (and its footprint map) explicitly.
+  if (back.type === 'member') {state.view = back.back || {type: 'home'}; run(() => memberDialog(back.id)); return;}
+  state.view = back;
+  render(); sheet.snap(state.view.type === 'home' ? 'peek' : 'half');
+}
+function leaveMember() {
+  footprintMap?.destroy(); footprintMap = null;
+  state.view = state.view.back || {type: 'home'};
+  render(); sheet.snap(state.view.type === 'home' ? 'peek' : 'half');
 }
 function profileDialog(member) {
   openModal('编辑我的资料', `<form id="profile-form"><label>姓名 / 昵称<input name="name" maxlength="60" value="${escape(member.name)}" required></label><p class="muted">修改后请使用新的姓名登录。</p><label>一句近况<textarea name="bio" maxlength="240">${escape(member.bio)}</textarea></label><button type="submit" class="primary">保存资料</button></form>`);
@@ -191,17 +364,20 @@ function profileDialog(member) {
 
 function locationDialog(member, loc = {}) {
   const isEdit = !!loc.id;
+  const abroad = !!loc.country_code && levelOf(loc) === 'world';
   openModal(isEdit ? '编辑这段足迹' : '留一个相聚的坐标', `<form id="location-form">
     <p class="muted">可以只填写城市，也可以在地图上选一个方便见面的点；无需填写家庭住址。</p>
-    <div class="form-grid"><label>国家<select name="country_code" id="country-select">${options(state.boot.countries, loc.country_code || 'CHN')}</select></label><label id="province-label">省级行政区<select name="province_code" id="province-select"><option value="">请选择省份</option>${options(state.boot.provinces, loc.province_code || '')}</select></label></div>
-    <label id="city-picker-label">选择城市<select id="city-select"><option value="">先选择省份，也可在下方手工填写</option></select></label>
+    <input type="hidden" name="country_code" id="country-code" value="${escape(loc.country_code || 'CHN')}"><input type="hidden" name="province_code" id="province-code" value="${escape(loc.province_code || '')}">
+    <div class="tog" role="group" aria-label="境内或境外"><button type="button" data-mode="china" class="${abroad ? '' : 'on'}">境内 · 城市</button><button type="button" data-mode="world" class="${abroad ? 'on' : ''}">境外 · 国家或地区</button></div>
+    <label>城市或国家<input id="place-input" type="text" inputmode="search" autocomplete="off" value="${escape(placeOf(loc.country_code ? {...loc, country_name: state.boot.countries?.[loc.country_code]} : null))}" placeholder="输入城市或国家名"></label><div class="sugg"></div>
     <div class="form-grid"><label>城市名称<input name="city_name" id="city-name" maxlength="80" value="${escape(loc.city_name || '')}" placeholder="如：杭州市 / Tokyo"></label><label id="city-code-label">城市行政区代码<input name="city_code" id="city-code" maxlength="6" inputmode="numeric" value="${escape(loc.city_code || '')}" placeholder="如：330100"></label></div>
     <label>地点备注<input name="label" maxlength="120" value="${escape(loc.label || '')}" placeholder="如：滨江 / 市中心 / 常去的咖啡店"></label>
-    <div class="form-grid"><label>到达日期<input name="started_on" type="date" max="${state.boot.today}" value="${loc.started_on || state.boot.today}" required></label><label>离开日期（当天起不计入）<input name="ended_on" type="date" value="${loc.ended_on || ''}"></label></div>
+    <div class="form-grid dates"><div class="opt"><span>到达日期</span><button type="button" class="text-button" data-date="started_on">${loc.started_on || state.boot.today}</button><input type="hidden" name="started_on" value="${loc.started_on || state.boot.today}"></div>
+      <div class="opt"><span>离开日期（当天起不计入）</span><button type="button" class="text-button" data-date="ended_on">${loc.ended_on || '还在这里'}</button><input type="hidden" name="ended_on" value="${loc.ended_on || ''}"><button type="button" class="text-button" data-clear-ended ${loc.ended_on ? '' : 'hidden'}>清除</button></div></div>
     ${!isEdit ? '<label class="checkbox"><input type="checkbox" name="close_previous" checked>将上一个未结束的常住地结束于此次到达日</label>' : ''}
     <div class="point-tools"><span>可选：在地图上点选位置</span><button type="button" id="gps-button">使用设备位置</button><button type="button" id="clear-point">仅记录城市</button></div>
     <div id="editor-map" class="mini-map"><p class="map-inline-status">正在加载选点地图…</p></div><p id="point-status" class="muted small" role="status">点选后请核对城市与行政区，位置只在保存时提交。</p>
-    <details class="coordinate-details"><summary>经纬度与坐标系</summary><div class="form-grid"><label>经度<input name="longitude" id="longitude" type="number" step="0.000001" min="-180" max="180" value="${loc.longitude ?? ''}"></label><label>纬度<input name="latitude" id="latitude" type="number" step="0.000001" min="-90" max="90" value="${loc.latitude ?? ''}"></label></div><label>坐标系<select name="coordinate_system" id="coordinate-system">${options({gcj02: 'GCJ-02（高德 / 中国内地）', wgs84: 'WGS84（境外）'}, loc.coordinate_system || 'gcj02')}</select></label></details>
+    <details class="coordinate-details"><summary>经纬度与坐标系</summary><div class="form-grid"><label>经度<input name="longitude" id="longitude" type="number" step="0.000001" min="-180" max="180" value="${loc.longitude ?? ''}"></label><label>纬度<input name="latitude" id="latitude" type="number" step="0.000001" min="-90" max="90" value="${loc.latitude ?? ''}"></label></div><div class="opt"><span>坐标系</span><div class="segmented" id="coord-seg"><button type="button" data-coord="gcj02">GCJ-02（中国内地）</button><button type="button" data-coord="wgs84">WGS84（境外）</button></div><input type="hidden" name="coordinate_system" id="coordinate-system" value="${escape(loc.coordinate_system || 'gcj02')}"></div></details>
     <label>这段时间的近况<textarea name="note" maxlength="500" placeholder="如：在杭州工作，周末一般有空。">${escape(loc.note || '')}</textarea></label>
     <button type="submit" class="primary">保存${isEdit ? '修改' : '足迹'}</button></form>`, true);
   const generation = modalGeneration;
@@ -212,53 +388,68 @@ function locationDialog(member, loc = {}) {
     $('#longitude').value = ''; $('#latitude').value = ''; marker?.setMap(null);
     $('#point-status').textContent = '只记录城市；如需共享位置点，请重新选点。';
   }
-  const updateCountry = () => {
-    const china = $('#country-select').value === 'CHN';
-    ['#province-label', '#city-code-label', '#city-picker-label'].forEach(id => $(id).hidden = !china);
-    $('#province-select').required = china;
-    $('#coordinate-system').value = china ? 'gcj02' : 'wgs84';
+  let mode = abroad ? 'world' : 'china';
+  const setCoord = value => {
+    $('#coordinate-system').value = value;
+    $('#coord-seg').querySelectorAll('[data-coord]').forEach(button => button.classList.toggle('active', button.dataset.coord === value));
   };
-  async function updateCities(clear = true) {
-    const request = ++cityRequest;
-    const province = $('#province-select').value;
-    if (clear) {$('#city-name').value = ''; $('#city-code').value = '';}
-    $('#city-select').innerHTML = '<option value="">可以只记录省份，或选择城市</option>';
-    if (municipalities.has(province)) {$('#city-name').value = state.boot.provinces[province]; $('#city-code').value = province; return;}
-    if (!province || !A) return;
-    try {
-      const cities = await districtChildren(A, province);
-      if (!active() || request !== cityRequest) return;
-      $('#city-select').innerHTML += cities.map(city => `<option value="${escape(city.adcode)}" data-name="${escape(city.name)}">${escape(city.name)}</option>`).join('');
-      if (!clear) $('#city-select').value = $('#city-code').value;
-    } catch (error) {if (active()) $('#point-status').textContent = error.message;}
-  }
+  $('#coord-seg').querySelectorAll('[data-coord]').forEach(button => button.onclick = () => setCoord(button.dataset.coord));
+  const updateCountry = () => {
+    const china = mode === 'china';
+    $('#city-code-label').hidden = !china;
+    setCoord(china ? 'gcj02' : 'wgs84');
+  };
+  const choosePlace = item => {
+    if (!item) return;
+    if (item.kind === 'region') {
+      $('#country-code').value = 'CHN'; $('#province-code').value = item.province; $('#city-code').value = ''; $('#city-name').value = '';
+    } else if (item.kind === 'province') {
+      $('#country-code').value = 'CHN'; $('#province-code').value = item.code; $('#city-code').value = ''; $('#city-name').value = '';
+    } else if (item.kind === 'china') {
+      const province = municipalities.has(item.city.adcode) ? item.city.adcode : item.city.province.adcode;
+      $('#country-code').value = 'CHN'; $('#province-code').value = province;
+      $('#city-code').value = item.city.adcode; $('#city-name').value = item.city.name;
+      modalMap?.setCity(item.city.adcode);
+    } else {
+      $('#country-code').value = item.code; $('#province-code').value = ''; $('#city-code').value = '';
+    }
+  };
   function setPoint(lng, lat) {
     if (!active()) return;
     const request = ++pointRequest;
     $('#longitude').value = Number(lng).toFixed(6); $('#latitude').value = Number(lat).toFixed(6);
     marker?.setMap(null); marker = new A.Marker({map: modalMap, position: [Number(lng), Number(lat)]});
     $('#point-status').textContent = '已选点，保存后才会更新班级地图。请核对下方所属城市。';
-    if ($('#country-select').value === 'CHN') {
+    if ($('#country-code').value === 'CHN') {
       new A.Geocoder().getAddress([Number(lng), Number(lat)], (status, result) => {
         if (!active() || request !== pointRequest || status !== 'complete' || !result.regeocode?.addressComponent) return;
         const address = result.regeocode.addressComponent;
         const province = String(address.adcode || '').slice(0, 2) + '0000';
         if (!state.boot.provinces[province]) return;
-        $('#province-select').value = province;
+        $('#province-code').value = province;
         const adcode = String(address.adcode);
         $('#city-code').value = cityKey(adcode.slice(2, 4) === '90' ? adcode : adcode.slice(0, 4) + '00', province);
         $('#city-name').value = municipalities.has(province) ? state.boot.provinces[province] : (Array.isArray(address.city) ? address.district : address.city) || address.district;
-        run(() => updateCities(false));
+        $('#place-input').value = shortName($('#city-name').value);
       });
     }
   }
-  $('#country-select').onchange = () => {
-    clearPoint(); updateCountry(); $('#city-name').value = ''; $('#city-code').value = '';
-    $('#province-select').value = ''; run(() => updateCities());
-  }; updateCountry();
-  if (loc.coordinate_system) $('#coordinate-system').value = loc.coordinate_system;
-  $('#province-select').onchange = () => {clearPoint(); run(() => updateCities()); if (modalMap && $('#province-select').value) modalMap.setCity($('#province-select').value);};
-  $('#city-select').onchange = () => {clearPoint(); const option = $('#city-select').selectedOptions[0]; $('#city-code').value = option.value; $('#city-name').value = option.dataset.name || ''; if (option.value) modalMap?.setCity(option.value);};
+  updateCountry();
+  setCoord(loc.coordinate_system || $('#coordinate-system').value);
+  const search = placeSearch($('#place-input'), $('#location-form .sugg'), {mode: () => mode, divisions: () => state.divisions,
+    countries: state.boot.countries || {}, provinces: state.boot.provinces || {}, onPick: item => {if (item) {clearPoint(); choosePlace(item);}}});
+  $('#location-form').querySelectorAll('[data-mode]').forEach(button => button.onclick = () => {
+    mode = button.dataset.mode; clearPoint(); updateCountry(); search.redraw();
+    $('#location-form').querySelectorAll('[data-mode]').forEach(other => other.classList.toggle('on', other === button));
+    $('#place-input').value = ''; $('#city-name').value = ''; $('#city-code').value = ''; $('#province-code').value = '';
+    $('#country-code').value = mode === 'china' ? 'CHN' : '';
+  });
+  $('#location-form').querySelectorAll('[data-date]').forEach(button => button.onclick = () => {
+    const field = button.dataset.date, hidden = $(`#location-form [name="${field}"]`);
+    dayPicker(button.closest('.opt'), {value: hidden.value || state.boot.today, min: '1990-01-01', max: field === 'started_on' ? state.boot.today : '2100-12-31',
+      onPick: iso => {hidden.value = iso; button.textContent = iso; if (field === 'ended_on') $('[data-clear-ended]').hidden = false;}});
+  });
+  $('[data-clear-ended]').onclick = event => {$('#location-form [name="ended_on"]').value = ''; $('[data-date="ended_on"]').textContent = '还在这里'; event.currentTarget.hidden = true;};
   $('#clear-point').onclick = clearPoint;
   $('#gps-button').onclick = () => {
     if (!A) {notify('请先等待地图加载完成', true); return;}
@@ -267,16 +458,17 @@ function locationDialog(member, loc = {}) {
     navigator.geolocation.getCurrentPosition(position => {
       if (!active()) return;
       const point = [position.coords.longitude, position.coords.latitude];
-      if ($('#country-select').value === 'CHN' && !['710000', '810000', '820000'].includes($('#province-select').value)) {
+      if ($('#country-code').value === 'CHN' && !['710000', '810000', '820000'].includes($('#province-code').value)) {
         A.convertFrom(point, 'gps', (status, result) => {
           if (!active()) return;
           if (status !== 'complete' || !result.locations?.length) {$('#point-status').textContent = '坐标转换失败，请手工在地图上选点。'; return;}
-          const p = result.locations[0]; $('#coordinate-system').value = 'gcj02'; setPoint(p.lng, p.lat); modalMap.setZoomAndCenter(12, [p.lng, p.lat]);
+          const p = result.locations[0]; setCoord('gcj02'); setPoint(p.lng, p.lat); modalMap.setZoomAndCenter(12, [p.lng, p.lat]);
         });
-      } else {$('#coordinate-system').value = 'wgs84'; setPoint(...point); modalMap.setZoomAndCenter(12, point);}
+      } else {setCoord('wgs84'); setPoint(...point); modalMap.setZoomAndCenter(12, point);}
     }, () => {if (active()) $('#point-status').textContent = '未能获取设备位置，可以直接在地图上选点。';}, {timeout: 15000, maximumAge: 0});
   };
   bindForm('#location-form', async data => {
+    if (!data.country_code) throw new Error('请先点选一个城市或国家');
     data.close_previous = data.close_previous === 'on';
     if (isEdit) data.version = loc.version;
     await api(`members/${member.id}/locations${isEdit ? '/' + loc.id : ''}`, isEdit ? 'PATCH' : 'POST', data);
@@ -289,7 +481,6 @@ function locationDialog(member, loc = {}) {
       modalMap = new A.Map('editor-map', {zoom: loc.longitude != null ? 10 : 4, center: loc.longitude != null ? [Number(loc.longitude), Number(loc.latitude)] : [104, 35], resizeEnable: true});
       if (loc.longitude != null) marker = new A.Marker({map: modalMap, position: [Number(loc.longitude), Number(loc.latitude)]});
       modalMap.on('click', event => setPoint(event.lnglat.lng, event.lnglat.lat));
-      await updateCities(false);
     } catch (error) {if (active()) $('#editor-map').textContent = error.message;}
   });
 }
@@ -367,14 +558,20 @@ $('#modal-close').onclick = closeModal;
 $('#modal').addEventListener('cancel', () => {modalMap?.destroy(); modalMap = null; modalGeneration++;});
 $('#gate-login').onclick = () => authDialog('login');
 bindForm('#unlock-form', async data => {await api('unlock', 'POST', data); await boot();});
-document.querySelectorAll('[data-level]').forEach(button => button.onclick = () => setLevel(button.dataset.level));
-$('#province-view').onchange = () => {if ($('#province-view').value) setLevel('province', $('#province-view').value);};
-$('#search').oninput = () => {state.search = $('#search').value; render();};
-$('#clear-filter').onclick = () => {state.selected = ''; state.selectedName = ''; state.unknown = false; state.search = ''; $('#search').value = ''; render();};
-$('#unknown-button').onclick = () => {state.unknown = !state.unknown; state.selected = ''; render();};
-$('#snapshot-date').onchange = () => run(async () => {if (!$('#snapshot-date').value) return; state.at = $('#snapshot-date').value; await refresh();});
-$('#today-button').onclick = () => run(async () => {state.at = state.boot.today; await refresh();});
-$('#timeline').oninput = () => {$('#timeline-date').textContent = dayString(Number($('#timeline').value));};
-$('#timeline').onchange = () => run(async () => {state.at = dayString(Number($('#timeline').value)); await refresh();});
-$('#map-reset').onclick = () => map?.reset();
+document.querySelectorAll('[data-scope]').forEach(button => button.onclick = () => setScope(button.dataset.scope));
+// A date picker opened from the peeking sheet would fall off the bottom of the screen.
+$('#range').addEventListener('click', event => {if (event.target.closest('[data-end]') && sheet.detent !== 'full') sheet.snap('full');}, true);
+$('#search').addEventListener('input', event => {state.search = event.target.value; renderSheet();});
+$('#fit-all').onclick = () => {map?.fit(); $('#fit-all').hidden = true;};
+$('#region-close').onclick = () => state.view.type === 'member' ? leaveMember() : state.view.type === 'update' ? leaveUpdate() : goHome();
+$('#range-chip').onclick = () => {goHome(); $('#range').scrollIntoView({block: 'nearest'});};
+$('#me-btn').onclick = () => state.boot.me ? run(openUpdate) : authDialog('login');
+// Keep the save bar above the on-screen keyboard (visual viewport shrinks, layout viewport does not).
+visualViewport?.addEventListener('resize', () => document.documentElement.style.setProperty('--kb', `${Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop)}px`));
+$('#list').addEventListener('click', event => {
+  const row = event.target.closest('[data-member]');
+  if (row) {run(() => memberDialog(Number(row.dataset.member))); return;}
+  if (event.target.closest('[data-more]')) sheet.snap('full');
+  if (event.target.closest('#expand-range')) rangeControl.set(presetRange('all', state.boot.today, state.earliest), 'all');
+});
 run(boot);
