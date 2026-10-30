@@ -134,11 +134,14 @@ DEBUG=1 python manage.py collectstatic --noinput
 DEBUG=1 python manage.py check
 DEBUG=1 python manage.py makemigrations --check --dry-run
 DEBUG=1 python manage.py test tests
+npm ci
 npm run check
 npm test
 ```
 
 CI 分别测试 SQLite 和 MySQL 8.4。核心覆盖：班级隔离、所有写接口权限、CSRF、密码轮换、认领过期和重放、区间边界与重叠、乐观锁、导入预览与回滚、行政区归一化。MySQL 作业额外执行并发区间写入测试。
+
+前端测试使用 Node.js 22.22.2+（22.x）或 24.15.0+（24.x）。`npm test` 包含无需高德 Key 的 DOM 回归测试，覆盖地点选择、导入后的时间范围、未填位置名单与页面返回；地图渲染和手势仍由下面的 Playwright 测试验证。
 
 2026-10-29 使用真实高德开发凭据与虚构同学数据完成浏览器联调：底图与审图号、世界国界点击进入中国、中国省界、浙江市界点击筛选杭州、历史日期切换、个人足迹编号和连线、城市检索与地图选点回填。该次联调通过只读前端测试服务进行，未覆盖浏览器提交至 Django、生产安全代理、正式域名或真实班级数据；业务写入由上述后端测试验证。凭据与联调数据不提交到仓库。
 
