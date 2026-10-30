@@ -140,6 +140,8 @@ def bootstrap(request, classroom, data):
               'me': {'id': member.pk, 'name': member.name, 'student_code': member.student_code} if member else None,
               'today': timezone.localdate().isoformat(), 'authenticated': request.user.is_authenticated}
     if unlocked:
+        if settings.AMAP_PROXY_ENABLED and request.session.get('amap_proxy_class') != classroom.pk:
+            request.session['amap_proxy_class'] = classroom.pk
         result['countries'] = countries()
         result['provinces'] = PROVINCES
         result['map'] = {'key': settings.AMAP_JS_KEY, 'service_host': settings.AMAP_SERVICE_HOST,

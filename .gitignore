@@ -7,3 +7,7 @@ staticfiles/
 artifacts/
 node_modules/
 .DS_Store
+.fc/
+.s/
+.env.*
+!.env.example

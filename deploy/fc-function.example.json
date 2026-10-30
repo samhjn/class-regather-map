@@ -1,0 +1,43 @@
+{
+  "functionName": "class-regather-map",
+  "description": "samhjn/class-regather-map Django web application",
+  "runtime": "custom.debian11",
+  "handler": "index.handler",
+  "cpu": 0.5,
+  "memorySize": 512,
+  "diskSize": 512,
+  "timeout": 60,
+  "instanceConcurrency": 4,
+  "internetAccess": false,
+  "customRuntimeConfig": {
+    "command": ["/var/fc/lang/python3.12/bin/python3"],
+    "args": ["/code/fc_bootstrap.py"],
+    "port": 9000
+  },
+  "vpcConfig": {
+    "role": "acs:ram::<account-id>:role/aliyunfcdefaultrole",
+    "vpcId": "<same-vpc-as-rds>",
+    "vSwitchIds": ["<vswitch-id>"],
+    "securityGroupId": "<dedicated-security-group-id>"
+  },
+  "environmentVariables": {
+    "DEBUG": "0",
+    "REGATHER_FC": "1",
+    "ALLOWED_HOSTS": "localhost,127.0.0.1",
+    "TRUST_PROXY": "1",
+    "SECURE_SSL_REDIRECT": "1",
+    "PYTHONPATH": "/code/python:/code",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONUNBUFFERED": "1",
+    "MYSQL_HOST": "<rds-private-host>",
+    "MYSQL_PORT": "3306",
+    "MYSQL_DATABASE": "class_regather_map",
+    "MYSQL_USER": "regather_fc",
+    "MYSQL_CONN_MAX_AGE": "0",
+    "MYSQL_CONNECT_TIMEOUT": "10",
+    "MYSQL_READ_TIMEOUT": "30",
+    "MYSQL_WRITE_TIMEOUT": "30",
+    "GUNICORN_THREADS": "4",
+    "DEFAULT_CLASS_SLUG": "our-class"
+  }
+}

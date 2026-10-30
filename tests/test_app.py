@@ -333,7 +333,7 @@ class AppTests(TestCase):
 
     def test_documented_import_example_is_usable(self):
         room = Classroom.objects.create(slug='example', name='模板验证')
-        rows = parse_import({'csv': (Path(__file__).resolve().parents[1] / 'docs/import-example.csv').read_text()})
+        rows = parse_import({'csv': (Path(__file__).resolve().parents[1] / 'docs/import-example.csv').read_text(encoding='utf-8')})
         result = import_rows(room, rows, self.admin)
         self.assertEqual(result['created'], 3)
         self.assertEqual(result['locations'], 3)
