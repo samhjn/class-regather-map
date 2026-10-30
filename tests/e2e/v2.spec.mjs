@@ -38,6 +38,31 @@ test('desktop: the list is a right-hand panel that folds down to a small card', 
   await expect.poll(() => visibleHeight(page)).toBeGreaterThanOrEqual(500);  // after the 340 ms slide
 });
 
+test('desktop: with the panel open the map still pans and zooms; a click on empty map folds the panel', async ({page}, info) => {
+  test.skip(info.project.name !== 'iphone', 'one desktop run is enough');
+  await page.setViewportSize({width: 1280, height: 800});
+  await unlock(page);
+  await page.locator('#sheet-title').click();
+  await expect(page.locator('#sheet')).toHaveAttribute('data-detent', 'full');
+  await page.waitForTimeout(1200);
+  const dot = () => page.locator('.pt .d').first().evaluate(el => {const r = el.getBoundingClientRect(); return {x: r.x, y: r.y};});
+  const before = await dot();
+  await page.mouse.move(400, 400);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(400 + i * 15, 400 + i * 8);
+  await page.mouse.up();
+  await page.waitForTimeout(800);
+  const after = await dot();
+  expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeGreaterThan(60);  // the map followed the mouse
+  await expect(page.locator('#sheet')).toHaveAttribute('data-detent', 'full');     // panning alone keeps the panel open
+  await page.mouse.move(400, 400);
+  await page.mouse.wheel(0, -400);
+  await page.waitForTimeout(900);
+  expect(await dot()).not.toEqual(after);                                           // wheel zoom reaches the map
+  await page.mouse.click(60, 700);  // empty land / sea, away from the dots
+  await expect(page.locator('#sheet')).toHaveAttribute('data-detent', 'peek');
+});
+
 test('search understands pinyin initials', async ({page}) => {
   await unlock(page);
   await page.locator('#sheet-title').click();
