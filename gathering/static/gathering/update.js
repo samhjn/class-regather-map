@@ -1,7 +1,7 @@
 import {municipalities} from './logic.js';
 import {monthPicker} from './pickers.js';
 import {escapeHTML, shortName, textMatches} from './views.js';
-import {REGIONS, REGION_NAMES} from './filter.js';
+import {REGIONS, REGION_NAMES, confirmationLabel} from './filter.js';
 
 // "Update my location" flow inside the sheet (spec 5.5, 5.8): confirm-in-place first,
 // otherwise move to a searched city/country. No native selects or date inputs.
@@ -9,24 +9,16 @@ import {REGIONS, REGION_NAMES} from './filter.js';
 const monthIndex = iso => Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7)) - 1;
 const monthStart = month => `${Math.floor(month / 12)}-${String(month % 12 + 1).padStart(2, '0')}-01`;
 
-function ageText(confirmedAt, today) {
-  if (!confirmedAt) return '还没确认过';
-  const months = monthIndex(today) - monthIndex(confirmedAt);
-  if (months < 12) return months <= 0 ? '这个月刚确认过' : `${months} 个月前确认`;
-  return `${confirmedAt.slice(0, 4)} 年的信息，已经 ${Math.floor(months / 12)} 年没确认了`;
-}
-
-// Type-to-search over prefecture cities (from one DistrictSearch) or ISO countries.
-export function placeSearch(input, list, {mode, divisions, countries, provinces = {}, onPick}) {
+// One search across cities, province-level places and countries.
+export function placeSearch(input, list, {divisions, countries, provinces = {}, onPick}) {
   // Without AMap's city list (no key, quota, outage) fall back to the server's own province
   // table, as the original form did, so a domestic stay can still be saved at province level.
   const domestic = () => divisions()?.list?.length
     ? divisions().list.filter(city => !REGIONS[city.province.adcode]).map(city => ({kind: 'china', city, label: shortName(city.name), detail: municipalities.has(city.adcode) ? '' : city.province.name}))
     : Object.entries(provinces).filter(([code]) => !REGIONS[code]).map(([code, name]) => ({kind: 'province', code, label: shortName(name), detail: '只填到省'}));
-  // 境外 = Hong Kong / Macau / Taiwan (stored under CHN with their province code) + other countries.
-  const regions = Object.entries(REGIONS).map(([province, code]) => ({kind: 'region', province, label: REGION_NAMES[code], detail: '境外地区'}));
-  const candidates = () => mode() === 'china' ? domestic()
-    : [...regions, ...Object.entries(countries).filter(([code]) => code !== 'CHN').map(([code, name]) => ({kind: 'world', code, label: name, detail: code}))];
+  // Region fallbacks also work when the map provider is unavailable.
+  const regions = Object.entries(REGIONS).map(([province, code]) => ({kind: 'region', province, label: REGION_NAMES[code], detail: '中国'}));
+  const candidates = () => [...domestic(), ...regions, ...Object.entries(countries).filter(([code]) => code !== 'CHN').map(([code, name]) => ({kind: 'world', code, label: name, detail: code}))];
   let shown = [];
   const draw = () => {
     const query = input.value.trim();
@@ -100,7 +92,7 @@ export function renderUpdate(root, ctx) {
   }
 
   function ask() {
-    root.innerHTML = `${who}<div class="card"><p class="s">地图上显示你在</p><p class="big">${escapeHTML(where)}</p><p class="s">${ageText(current.confirmed_at, today)}</p></div>
+    root.innerHTML = `${who}<div class="card"><p class="s">地图上显示你在</p><p class="big">${escapeHTML(where)}</p><p class="s">${confirmationLabel(current.confirmed_at, today)}</p></div>
       <button id="update-confirm" class="primary block" type="button">我还在${escapeHTML(where)}</button>
       <button id="update-move" class="secondary block" type="button">我搬家了</button>
       <p class="note">只有输入过班级查看码的同学能看到</p>`;
@@ -140,10 +132,9 @@ export function renderUpdate(root, ctx) {
   }
 
   function move() {
-    let mode = 'china', picked = null, movedAt = null;
+    let picked = null, movedAt = null;
     root.innerHTML = `${who}
-      <div class="tog" role="group" aria-label="境内或境外"><button type="button" data-mode="china" class="on">境内 · 城市</button><button type="button" data-mode="world">境外 · 国家或地区</button></div>
-      <label>现在在哪<input id="place-input" type="text" inputmode="search" autocomplete="off" placeholder="输入城市名，比如 深圳"></label>
+      <label>现在在哪<input id="place-input" type="text" inputmode="search" autocomplete="off" placeholder="搜索深圳、香港、日本等"></label>
       <p class="hint">点选下面的结果后才能保存</p>
       <div class="sugg"></div>
       <button id="locate" class="text-button" type="button">用我现在的定位（只取到城市）</button>
@@ -156,17 +147,10 @@ export function renderUpdate(root, ctx) {
     let refreshing = false;
     // One rule for the save button: a city is picked and nothing is in flight.
     const sync = () => {save.disabled = !picked || refreshing; root.querySelector('.hint').hidden = !!picked;};
-    const search = placeSearch(input, root.querySelector('.sugg'), {mode: () => mode, divisions: ctx.divisions, countries: ctx.countries, provinces: ctx.provinces,
-      onPick: item => {if (item) locateToken++; picked = item; sync();}});
-    const controls = () => root.querySelectorAll('input, [data-mode], #locate, #moved-at, #update-save');
+    placeSearch(input, root.querySelector('.sugg'), {divisions: ctx.divisions, countries: ctx.countries, provinces: ctx.provinces,
+      onPick: item => {locateToken++; picked = item; sync();}});
+    const controls = () => root.querySelectorAll('input, #locate, #moved-at, #update-save');
     const setBusy = busy => {controls().forEach(control => {control.disabled = busy;}); if (!busy) sync();};
-    root.querySelectorAll('[data-mode]').forEach(button => button.onclick = () => {
-      locateToken++;
-      mode = button.dataset.mode; picked = null; input.value = ''; sync(); search.redraw();
-      root.querySelectorAll('[data-mode]').forEach(other => other.classList.toggle('on', other === button));
-      input.placeholder = mode === 'china' ? '输入城市名，比如 深圳' : '输入国家或地区，比如 日本、香港';
-      root.querySelector('#locate').hidden = mode !== 'china';
-    });
     root.querySelector('#moved-at').onclick = event => monthPicker(event.currentTarget.closest('.opt'), {
       value: movedAt ?? monthIndex(today), min: monthIndex(today) - 12 * 15, max: monthIndex(today),
       onPick: month => {movedAt = month; event.target.textContent = `${Math.floor(month / 12)}.${String(month % 12 + 1).padStart(2, '0')}`; error.textContent = '';}});
@@ -194,7 +178,7 @@ export function renderUpdate(root, ctx) {
       const payload = {...body, started_on: started, label: root.querySelector('#update-label').value.trim(), close_previous: true};
       setBusy(true); save.textContent = '正在保存…'; error.textContent = '';
       api(`members/${me.id}/locations`, 'POST', {...payload, ...notePart(bio)}).then(async () => {
-        notify(`已更新到${label} · 最近确认：今天${ctx.todayInRange() ? '' : '（不在当前筛选的时间段里）'}`);
+        notify(`已更新到${label}`);
         await onDone();
       }, async err => {
         setBusy(false);

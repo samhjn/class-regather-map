@@ -11,7 +11,7 @@ test('the closed sheet is a slim bar; tapping it opens the range and list', asyn
   expect(await detent(page)).toBe('peek');
   expect(await visibleHeight(page)).toBeLessThanOrEqual(150);
   await expect(page.locator('#range')).not.toBeInViewport();
-  await expect(page.locator('#sheet-summary')).toContainText('近 3 年');
+  await expect(page.locator('#sheet-summary')).toContainText('近三年');
   await page.locator('#sheet-title').click();
   expect(await detent(page)).toBe('half');
   await expect(page.locator('#range [data-preset="3y"]')).toBeInViewport();
@@ -195,25 +195,25 @@ test.describe('features carried over from the original', () => {
     await expect(page.locator('#sheet-body .mem', {hasText: name}).locator('.me')).toHaveText('我');
   });
 
-  test('a footprint shows when it was last updated and explains the leave date', async ({page}) => {
+  test('a footprint shows a fuzzy confirmation label and explains the leave date', async ({page}) => {
     await loginAs(page, '林晓');
     await dragSheet(page, -700);
     await page.locator('#account [data-act="profile"]').click();
-    await expect(page.locator('#member-detail')).toContainText('资料更新于');
+    await expect(page.locator('#member-detail')).toContainText(/近1周|近1月|近1年|近3年|很久没有来过/);
     await expect(page.locator('#member-detail')).toContainText('离开当天起不计入');
   });
 });
 
-test('the scope switch reads 境内 / 境外, and Hong Kong is counted under 境外', async ({page}) => {
+test('view shortcuts are neutral and Hong Kong is reachable from either view', async ({page}) => {
   await unlock(page);
-  await expect(page.locator('#scope-seg [data-scope="china"]')).toContainText('境内');
-  await expect(page.locator('#scope-seg [data-scope="world"]')).toContainText('境外');
-  await page.locator('#sheet-title').click();
-  await page.locator('#range [data-preset="all"]').click();
-  await page.locator('#scope-seg [data-scope="world"]').click();
-  await dragSheet(page, -700);
-  const group = page.locator('#sheet-body .sec', {hasText: '香港'});
-  await expect(group).toBeVisible();
-  // The person sits right under the 香港 group header.
-  expect(await group.evaluate(sec => sec.nextElementSibling?.textContent)).toContain('许港生');
+  await expect(page.locator('[data-scope="china"]')).toHaveText('中国视野');
+  await expect(page.locator('[data-scope="world"]')).toHaveText('世界视野');
+  for (const scope of ['china', 'world']) {
+    await page.locator(`[data-scope="${scope}"]`).click();
+    await page.locator('#sheet-title').click();
+    await page.locator('#range [data-preset="all"]').click();
+    await dragSheet(page, -700);
+    await expect(page.locator('.mem', {hasText: '许港生'})).toContainText('香港');
+    await dragSheet(page, 700);
+  }
 });

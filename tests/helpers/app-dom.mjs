@@ -39,14 +39,14 @@ export async function openApp(t, {members = [person(1)], wide = true} = {}) {
   const boot = {classroom: {name: '测试班', description: '', slug: 'demo'}, me: {id: 1, name: '同学1'},
     authenticated: true, unlocked: true, has_password: true, is_admin: true, today: '2026-10-30', map: {},
     countries: {CHN: '中国', JPN: '日本'}, provinces: {'330000': '浙江省', '440000': '广东省'}};
-  let imported = [], records = structuredClone(members);
+  let imported = [], records = structuredClone(members), snapshotDate = boot.today;
   const fetch = async (url, options = {}) => {
     const route = new URL(url).pathname.split('/api/')[1];
     const data = options.body ? JSON.parse(options.body) : null;
     calls.push({route, method: options.method || 'GET', data});
     let body;
     if (route === 'bootstrap') body = boot;
-    else if (route === 'snapshot') body = {members: records};
+    else if (route === 'snapshot') body = {at: snapshotDate, members: records};
     else if (/^members\/\d+$/.test(route)) {
       const member = records.find(row => row.id === Number(route.split('/')[1]));
       assert.ok(member, `Unknown member: ${route}`);
@@ -84,6 +84,7 @@ export async function openApp(t, {members = [person(1)], wide = true} = {}) {
   const input = (selector, value) => {$(selector).value = value; $(selector).dispatchEvent(new window.Event('input', {bubbles: true}));};
   const submit = selector => $(selector).dispatchEvent(new window.Event('submit', {bubbles: true, cancelable: true}));
   return {$, document, calls, click, input, submit,
+    advanceDay(iso) {snapshotDate = iso;},
     async importMembers(rows) {
       imported = rows;
       click('#account [data-act="admin"]');

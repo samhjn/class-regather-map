@@ -57,12 +57,12 @@ function withDocument(run) {
 const countOf = marker => Number(marker.content.innerHTML.match(/class="d"[^>]*>(\d+)</)[1]);
 const labelOf = marker => marker.content.innerHTML.match(/class="nm">([^<]*)</)[1];
 
-test('count markers sum to the filtered domestic count and drop out-of-range people', () => withDocument(() => {
+test('count markers sum to the filtered class count and drop out-of-range people', () => withDocument(() => {
   const map = new ClassMap(stubSDK(), 'map', {divisions});
   map.update(people, range);
   const total = map.markers.reduce((sum, marker) => sum + countOf(marker), 0);
-  assert.equal(total, consistentCounts(people, range).china);
-  assert.equal(total, 8);
+  assert.equal(total, consistentCounts(people, range).total);
+  assert.equal(total, 9);
 }));
 
 test('province-only people get their own labelled point', () => withDocument(() => {
@@ -81,10 +81,10 @@ test('close cities merge into a cluster that splits when zoomed in', () => withD
   map.update(people, range);
   const merged = map.markers.find(marker => marker.content.className.includes('cl'));
   assert.ok(merged, 'a cluster marker exists');
-  assert.match(labelOf(merged), /等 \d 城$/);
+  assert.match(labelOf(merged), /等 \d 地$/);
   map.map.scale = 1000; map.map.events.zoomend();
   assert.equal(map.markers.filter(marker => marker.content.className.includes('cl')).length, 0);
-  assert.equal(map.markers.length, 4);
+  assert.equal(map.markers.length, 5);
 }));
 
 test('clicking a city picks it; clicking a cluster zooms to its points', () => withDocument(() => {
@@ -94,7 +94,7 @@ test('clicking a city picks it; clicking a cluster zooms to its points', () => w
   map.markers.find(marker => marker.content.className.includes('cl')).content.onclick({stopPropagation() {}});
   assert.equal(clusters.length, 1);
   assert.equal(map.map.fits.length, 1);
-  assert.ok(map.map.fits[0].maxZoom <= 9, 'a cluster tap zooms to city level, not street level');
+  assert.ok(map.map.fits[0].maxZoom === 11, 'a cluster tap allows nearby cities to separate');
   map.map.scale = 1000; map.map.events.zoomend();
   map.markers.find(marker => labelOf(marker) === '武汉').content.onclick({stopPropagation() {}});
   assert.deepEqual(picks, [['420100', 'china']]);
@@ -111,13 +111,15 @@ test('selection marks the point without changing its count colour', () => withDo
   assert.equal(after.content.innerHTML.match(/background:[^;"]+/)[0], before.match(/background:[^;"]+/)[0]);
 }));
 
-test('world level counts only overseas people, placed at the country centre', () => withDocument(() => {
+test('world view retains Chinese cities alongside country dots', () => withDocument(() => {
   const map = new ClassMap(stubSDK(), 'map', {divisions});
-  map.setLevel('world');
-  map.update(people, range);
-  assert.equal(map.markers.length, 1);
-  assert.equal(labelOf(map.markers[0]), '新加坡');
-  assert.deepEqual([...map.markers[0].position], [103.82, 1.35]);
+  map.map.scale = 1000;
+  map.setLevel('world'); map.update(people, range);
+  assert.equal(map.markers.length, 5);
+  const singapore = map.markers.find(marker => labelOf(marker) === '新加坡');
+  assert.deepEqual([...singapore.position], [103.82, 1.35]);
+  assert.ok(map.markers.some(marker => labelOf(marker) === '武汉'));
+  assert.equal(map.counts.get('CHN'), 8);
 }));
 
 test('fit leaves room for the bottom sheet and destroy unhooks events', () => withDocument(() => {
@@ -234,14 +236,32 @@ test('focus keeps the city clear of a right-hand panel; a bare touch is not a pa
   assert.equal(moved.length, 1);
 }));
 
-test('境外 shows Hong Kong as its own dot; 境内 does not count it', () => withDocument(() => {
+test('Hong Kong is visible and selectable in both views without provider divisions', () => withDocument(() => {
   const hk = {id: 30, name: '港', location: {country_code: 'CHN', province_code: '810000', province_name: '香港特别行政区', city_code: '810000', city_name: '香港特别行政区', confirmed_at: at}};
-  const map = new ClassMap(stubSDK(), 'map', {divisions});
+  const picks = [];
+  const map = new ClassMap(stubSDK(), 'map', {divisions, onPick: (...args) => picks.push(args)});
   map.map.scale = 1000;
   map.update([hk, ...people], range);
-  assert.ok(!map.markers.some(marker => labelOf(marker) === '香港'));
-  map.setLevel('world');
-  const dot = map.markers.find(marker => labelOf(marker) === '香港');
-  assert.ok(dot);
-  assert.deepEqual([...dot.position], [114.17, 22.32]);
+  for (const level of ['china', 'world']) {
+    map.setLevel(level);
+    const dot = map.markers.find(marker => labelOf(marker) === '香港');
+    assert.ok(dot);
+    assert.deepEqual([...dot.position], [114.17, 22.32]);
+    dot.content.onclick({stopPropagation() {}});
+    assert.deepEqual(picks.at(-1), ['810000', 'china']);
+  }
+}));
+
+test('Guangzhou, Shenzhen, Hong Kong and Macau cluster together and split on zoom', () => withDocument(() => {
+  const map = new ClassMap(stubSDK(), 'map', {divisions});
+  const bay = [loc('440100', {longitude: 113.26, latitude: 23.13}), loc('440300', {longitude: 114.06, latitude: 22.54}),
+    loc('', {province_code: '810000'}), loc('', {province_code: '820000'})].map((location, id) => ({id, location}));
+  map.update(bay, range);
+  assert.equal(map.markers.length, 1);
+  assert.equal(map.markers[0].count, 4);
+  map.fit();
+  assert.equal(map.map.fits.at(-1).markers.length, 4);
+  map.map.scale = 1000; map.map.events.zoomend();
+  assert.equal(map.markers.length, 4);
+  assert.equal(map.markers.reduce((sum, marker) => sum + marker.count, 0), 4);
 }));

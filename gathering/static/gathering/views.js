@@ -1,4 +1,4 @@
-import {REGIONS, REGION_NAMES, inRange} from './filter.js';
+import {REGIONS, REGION_NAMES, confirmationLabel, inRange} from './filter.js';
 
 // HTML builders for the sheet lists (spec 5.1–5.4). Pure: data in, escaped HTML out.
 
@@ -9,10 +9,7 @@ const CHEVRON = '<svg class="chev" width="8" height="14" viewBox="0 0 8 14" aria
 
 export const regionTitle = (name, n) => `${name} · ${n} 人`;
 export const sectionTitle = fresh => fresh ? '这段时间确认过' : '更早的记录';
-// Name of the second group on any list: "older" only when the range runs to today.
-export const otherGroup = (toToday, place = '') => toToday
-  ? {title: '更早的记录', note: place ? `可能已经不在${place}了` : '可能已经搬走了'}
-  : {title: '其他记录', note: '不在这段时间里'};
+export const otherGroup = () => ({title: '更早的记录', note: '位置尚未再次确认'});
 export const summaryLine = total => `这段时间确认过位置 · 全班 ${total} 人`;
 
 export function placeOf(loc) {
@@ -24,7 +21,7 @@ export function placeOf(loc) {
 export function memberRow(member, range, {showPlace = false, meId = null} = {}) {
   const loc = member.location;
   const fresh = loc && inRange(loc.confirmed_at, range);
-  const tag = !loc ? '还没填位置' : !loc.confirmed_at ? '还没确认过' : fresh ? `${loc.confirmed_at.slice(0, 4)}.${loc.confirmed_at.slice(5, 7)} 确认` : `${loc.confirmed_at.slice(0, 4)} 年的信息`;
+  const tag = !loc ? '还没填位置' : confirmationLabel(loc.confirmed_at, range.today);
   const line = [showPlace ? placeOf(loc) : '', loc?.label].filter(Boolean).join(' · ');  // empty stays empty
   const note = member.bio;  // only the personal note: clearing it clears the line (old stay notes stay in the footprint)
   return `<button type="button" class="mem${fresh ? '' : ' old'}" data-member="${member.id}">` +

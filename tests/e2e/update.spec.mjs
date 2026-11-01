@@ -57,7 +57,7 @@ test('the form is locked while saving and keeps the input when saving fails', as
   await expect(page.locator('#update-save')).toHaveText('正在保存…');
   await expect(page.locator('#update-save')).toBeDisabled();
   await expect(page.locator('#place-input')).toBeDisabled();
-  await expect(page.locator('#update [data-mode="world"]')).toBeDisabled();
+  await expect(page.locator('#locate')).toBeDisabled();
   release();
   await expect(page.locator('#update .field-error')).toContainText('没保存成功：服务暂时不可用');
   await expect(page.locator('#update .field-error')).toContainText('内容已保留');
@@ -72,7 +72,6 @@ test('a late device location does not overwrite a later manual choice', async ({
   await page.locator('#me-btn').click();
   await page.locator('#update-move').click();
   await page.locator('#locate').click();
-  await page.locator('#update [data-mode="world"]').click();
   await page.locator('#place-input').fill('日本');
   await page.locator('.sugg [data-place]', {hasText: '日本'}).first().click();
   await page.waitForTimeout(4000);  // long enough for convertFrom + reverse geocoding to land
@@ -153,7 +152,7 @@ test('moving to Shenzhen without a month starts today', async ({page}) => {
   await page.locator('.sugg [data-place]', {hasText: '深圳'}).first().click();
   await page.locator('#update-label').fill('南山 · 做游戏');
   await page.locator('#update-save').click();
-  await expect(page.locator('#toast')).toContainText('已更新到深圳 · 最近确认：今天');
+  await expect(page.locator('#toast')).toContainText('已更新到深圳');
   const latest = await page.evaluate(async () => {
     const me = (await (await fetch('api/bootstrap', {credentials: 'same-origin'})).json()).me;
     const detail = await (await fetch(`api/members/${me.id}`, {credentials: 'same-origin'})).json();
