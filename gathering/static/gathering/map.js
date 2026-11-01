@@ -67,7 +67,7 @@ export class ClassMap {
       features: ['bg', 'road', 'building']});  // no provider place labels: our dots carry the names, never twice
     this.map.addControl(new A.Scale());
     this.setDivisions(divisions);
-    const moved = () => {if (!this.userMoved) {this.userMoved = true; this.onUserMoved();}};
+    const moved = this.markUserMoved = () => {if (!this.userMoved) {this.userMoved = true; this.onUserMoved();}};
     // A real pan, a pinch or a wheel zoom hands the view to the user; a bare tap does not.
     this.map.on('dragstart', moved);
     const container = this.map.getContainer?.();
@@ -182,6 +182,7 @@ export class ClassMap {
       event.stopPropagation();
       if (!merged) {this.onPick(members[0].key, members[0].level); return;}
       this.map.setFitView(members.map(point => new this.A.Marker({position: point.position})), false, this.padding(), 11);  // enough to separate nearby cities such as Shenzhen and Hong Kong
+      this.markUserMoved();  // the user chose this view: a sheet resize must not re-fit it away
       this.onClusterPick(members.map(point => point.key));
     });
     const marker = new this.A.Marker({position, content, offset: new this.A.Pixel(-size / 2, -size / 2), zIndex: selected ? 130 : 120, bubble: false});

@@ -191,6 +191,8 @@ summary { min-height: 44px; display: flex; align-items: center; font-weight: 600
    the right so AMap's logo, scale and review number (bottom-left) are never covered. */
 @media (min-width: 720px) {
   .sheet { left: auto; right: 16px; width: 400px; bottom: 16px; height: calc(100% - 92px); border-radius: var(--r-sheet); }
+  /* The side panel owns the top-right corner: 看全部 moves left of it. */
+  .fit-all { right: calc(16px + 400px + 12px); top: calc(10px + var(--safe-top)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

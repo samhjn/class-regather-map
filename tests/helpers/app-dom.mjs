@@ -23,7 +23,7 @@ export async function eventually(check) {
 
 // Run the real app entry point against its real HTML. Only browser layout APIs and
 // the backend are substituted; no AMap key or network is needed for these UI flows.
-export async function openApp(t, {members = [person(1)], wide = true} = {}) {
+export async function openApp(t, {members = [person(1)], wide = true, intercept = () => null} = {}) {
   const dom = new JSDOM(template.replace(/\{%.*?%\}/g, ''), {url: 'https://example.test/c/demo/'});
   const {window} = dom, {document} = window;
   const $ = selector => {
@@ -44,6 +44,9 @@ export async function openApp(t, {members = [person(1)], wide = true} = {}) {
     const route = new URL(url).pathname.split('/api/')[1];
     const data = options.body ? JSON.parse(options.body) : null;
     calls.push({route, method: options.method || 'GET', data});
+    // A test may hold (or fail) one request to replay responses landing out of order.
+    const pending = intercept({route, method: options.method || 'GET', data});
+    if (pending) await pending;
     let body;
     if (route === 'bootstrap') body = boot;
     else if (route === 'snapshot') body = {at: snapshotDate, members: records};

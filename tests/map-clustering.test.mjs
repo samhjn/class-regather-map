@@ -265,3 +265,15 @@ test('Guangzhou, Shenzhen, Hong Kong and Macau cluster together and split on zoo
   assert.equal(map.markers.length, 4);
   assert.equal(map.markers.reduce((sum, marker) => sum + marker.count, 0), 4);
 }));
+
+test('zooming into a cluster hands the view to the user, so opening the sheet does not re-fit it away', () => withDocument(() => {
+  const moved = [];
+  const map = new ClassMap(stubSDK(), 'map', {divisions, onUserMoved: () => moved.push(1)});
+  map.map.scale = 1;  // far out: 武汉 and 长沙 merge
+  map.update(people, range);
+  const merged = map.markers.find(marker => marker.content.className.includes(' cl'));
+  assert.ok(merged, 'a cluster dot exists at this scale');
+  merged.content.onclick({stopPropagation() {}});
+  assert.equal(map.userMoved, true);
+  assert.equal(moved.length, 1);  // and 看全部 is offered
+}));

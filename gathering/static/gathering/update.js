@@ -38,6 +38,11 @@ export function placeSearch(input, list, {divisions, countries, provinces = {}, 
 }
 
 let teardown = () => {};
+let drafted = () => false;
+// Has the open form been typed into or had a place picked? Navigation elsewhere would lose it.
+export const updateHasDraft = () => drafted();
+const reason = err => String(err.message || '').replace(/[。.]+$/, '');
+const placeOf = loc => loc ? (loc.country_code === 'CHN' ? shortName(loc.city_name) || shortName(loc.province_name) : loc.country_name) : '';
 
 // The fields a stay PATCH must resend (the server validates the whole stay).
 const STAY_FIELDS = ['country_code', 'province_code', 'city_code', 'city_name', 'label', 'longitude', 'latitude', 'coordinate_system', 'started_on', 'ended_on', 'note'];
@@ -48,9 +53,19 @@ export function renderUpdate(root, ctx) {
   // Everything this view hangs on window/visualViewport goes away with it.
   const lifetime = new AbortController();
   let locateToken = 0;  // bumped by any newer choice, so a late device location is ignored
-  teardown = () => {lifetime.abort(); locateToken++;};
+  let dirty = false;
+  root.addEventListener('input', () => {dirty = true;}, {signal: lifetime.signal});
+  drafted = () => dirty;
+  teardown = () => {lifetime.abort(); locateToken++; drafted = () => false;};
   const {me, current, today, api, notify, onDone, onNotMe} = ctx;
-  const where = current ? (current.country_code === 'CHN' ? shortName(current.city_name) || shortName(current.province_name) : current.country_name) : '';
+  // Read live: a conflict refresh can reveal the stay was moved elsewhere meanwhile.
+  const where = () => placeOf(current);
+  // A save answered after this form was left (or rebuilt) must not touch the page any more.
+  const left = () => lifetime.signal.aborted;
+  // The data is saved; only the page refresh failed. Say so rather than hang on 正在保存.
+  const finish = async (save, label) => {
+    try {await onDone();} catch (err) {save.textContent = label; notify(`已保存，但页面没刷新成功：${reason(err)}。请刷新网页查看。`, true);}
+  };
   const who = `<p class="who">正在更新：<b>${escapeHTML(me.name)}</b><button type="button" class="text-button">不是我</button></p>`;
 
   const fields = (label = '', bio = '') => `
@@ -81,19 +96,19 @@ export function renderUpdate(root, ctx) {
   // While refreshing, the caller keeps saving disabled; settle() then re-derives the button
   // from the form's own rules (it never just switches it back on).
   async function afterConflict(err, inputs, error, settle) {
-    error.textContent = `${err.message}。正在刷新…`;
+    error.textContent = `${reason(err)}。正在刷新…`;
     try {
       await refreshVersions(inputs);
-      error.textContent = `${err.message}。已刷新，你改的内容还在，再点一次保存就行。`;
+      error.textContent = `${reason(err)}。已刷新，你改的内容还在，再点一次保存就行。`;
     } catch {
-      error.textContent = `${err.message}。没刷新成功，请检查网络后再点保存。`;
+      error.textContent = `${reason(err)}。没刷新成功，请检查网络后再点保存。`;
     }
     settle();
   }
 
   function ask() {
-    root.innerHTML = `${who}<div class="card"><p class="s">地图上显示你在</p><p class="big">${escapeHTML(where)}</p><p class="s">${confirmationLabel(current.confirmed_at, today)}</p></div>
-      <button id="update-confirm" class="primary block" type="button">我还在${escapeHTML(where)}</button>
+    root.innerHTML = `${who}<div class="card"><p class="s">地图上显示你在</p><p class="big">${escapeHTML(where())}</p><p class="s">${confirmationLabel(current.confirmed_at, today)}</p></div>
+      <button id="update-confirm" class="primary block" type="button">我还在${escapeHTML(where())}</button>
       <button id="update-move" class="secondary block" type="button">我搬家了</button>
       <p class="note">只有输入过班级查看码的同学能看到</p>`;
     bindWho();
@@ -103,30 +118,34 @@ export function renderUpdate(root, ctx) {
 
   // Still here: the city stays, but workplace and note have likely changed since 2015.
   function still() {
-    root.innerHTML = `${who}<div class="card"><p class="s">还在</p><p class="big">${escapeHTML(where)}</p><p class="s">顺便看看下面两项还对不对</p></div>
+    root.innerHTML = `${who}<div class="card"><p class="s">还在</p><p class="big">${escapeHTML(where())}</p><p class="s">顺便看看下面两项还对不对</p></div>
       ${fields(current.label, ctx.bio)}
       <p class="field-error" role="alert"></p>
-      <div class="savebar"><button id="update-still-save" class="primary block" type="button">确认还在${escapeHTML(where)}</button></div>`;
+      <div class="savebar"><button id="update-still-save" class="primary block" type="button">确认还在${escapeHTML(where())}</button></div>`;
     bindWho();
     const save = root.querySelector('#update-still-save'), error = root.querySelector('.field-error');
     const inputs = {label: root.querySelector('#update-label'), bio: root.querySelector('#update-bio')};
+    const ready = () => {const place = where(); save.disabled = false; save.textContent = `确认还在${place}`; root.querySelector('.card .big').textContent = place;};
     save.onclick = () => {
       const label = inputs.label.value.trim(), bio = inputs.bio.value.trim();
       root.querySelectorAll('input, button').forEach(control => {control.disabled = true;});
-      save.textContent = '正在保存…'; error.textContent = '';
+      save.textContent = '正在保存…';  // the old message stays until the answer: clearing it would pull the button up under a second tap
       const note = notePart(bio);
       // Only an edited workplace is sent (as an edit of this stay, which by the member also
       // confirms it); otherwise the confirm endpoint refreshes the confirmation alone.
       const request = label === opened.label
         ? api(`members/${me.id}/locations/${current.id}/confirm`, 'POST', {version: current.version, ...note})
         : api(`members/${me.id}/locations/${current.id}`, 'PATCH', {...stayFields(current), label, version: current.version, ...note});
+      const place = where();
       request.then(async () => {
-        notify(`已确认还在${where}`);
-        await onDone();
+        if (left()) {ctx.onSavedAfterLeaving?.(); return;}  // saved: refresh the data, leave the new page alone
+        notify(`已确认还在${place}`);
+        await finish(save, `确认还在${place}`);
       }, async err => {
+        if (left()) return;
         root.querySelectorAll('input, button:not(#update-still-save)').forEach(control => {control.disabled = false;});
-        if (err.status === 409) await afterConflict(err, inputs, error, () => {save.disabled = false; save.textContent = `确认还在${where}`;});
-        else {save.disabled = false; save.textContent = `确认还在${where}`; error.textContent = `没保存成功：${err.message}`;}
+        if (err.status === 409) await afterConflict(err, inputs, error, ready);
+        else {ready(); error.textContent = `没保存成功：${reason(err)}。`;}
       });
     };
   }
@@ -144,11 +163,11 @@ export function renderUpdate(root, ctx) {
       <div class="savebar"><button id="update-save" class="primary block" type="button" disabled>保存</button></div>`;
     bindWho();
     const input = root.querySelector('#place-input'), save = root.querySelector('#update-save'), error = root.querySelector('.field-error');
-    let refreshing = false;
+    let refreshing = false, saving = false;
     // One rule for the save button: a city is picked and nothing is in flight.
-    const sync = () => {save.disabled = !picked || refreshing; root.querySelector('.hint').hidden = !!picked;};
+    const sync = () => {save.disabled = !picked || refreshing || saving; root.querySelector('.hint').hidden = !!picked;};
     placeSearch(input, root.querySelector('.sugg'), {divisions: ctx.divisions, countries: ctx.countries, provinces: ctx.provinces,
-      onPick: item => {locateToken++; picked = item; sync();}});
+      onPick: item => {if (item) {locateToken++; dirty = true;} picked = item; sync();}});
     const controls = () => root.querySelectorAll('input, #locate, #moved-at, #update-save');
     const setBusy = busy => {controls().forEach(control => {control.disabled = busy;}); if (!busy) sync();};
     root.querySelector('#moved-at').onclick = event => monthPicker(event.currentTarget.closest('.opt'), {
@@ -157,16 +176,20 @@ export function renderUpdate(root, ctx) {
     root.querySelector('#locate').onclick = () => {
       const token = ++locateToken;
       ctx.locate().then(city => {
-      if (!city || token !== locateToken || !input.isConnected) return;
-      picked = {kind: 'china', city, label: shortName(city.name)}; input.value = picked.label; sync();
+        if (token !== locateToken || !input.isConnected) return;
+        if (!city) {notify('没能把定位对应到城市，请直接输入。', true); return;}
+        picked = {kind: 'china', city, label: shortName(city.name)}; input.value = picked.label; sync();
       }, err => {if (token === locateToken) notify(err.message, true);});
     };
 
     save.onclick = () => {
-      if (!picked || refreshing) return;
+      if (!picked || refreshing || saving) return;
       const started = movedAt === null ? today : monthStart(movedAt);
       // Same rule the server enforces (no overlap); checked here so the reason names the old city.
-      if (current && started <= current.started_on) {error.textContent = `这个时间比你在${where}的开始时间还早`; return;}
+      if (current && started < current.started_on) {error.textContent = `这个时间比你在${where()}的开始时间还早`; return;}
+      // A second move starting the same day as the current stay corrects that stay (a wrong
+      // pick earlier today), rather than stacking a zero-length stay in front of it.
+      const correcting = current && started === current.started_on;
       const body = picked.kind === 'china'
         ? {country_code: 'CHN', province_code: municipalities.has(picked.city.adcode) ? picked.city.adcode : picked.city.province.adcode,
           city_code: picked.city.adcode, city_name: picked.city.name}
@@ -176,11 +199,19 @@ export function renderUpdate(root, ctx) {
       // Freeze what is being saved: the form is locked, and the toast names this place.
       const label = picked.label, bio = root.querySelector('#update-bio').value.trim();
       const payload = {...body, started_on: started, label: root.querySelector('#update-label').value.trim(), close_previous: true};
-      setBusy(true); save.textContent = '正在保存…'; error.textContent = '';
-      api(`members/${me.id}/locations`, 'POST', {...payload, ...notePart(bio)}).then(async () => {
+      locateToken++; saving = true;                 // a late device location must not swap the place mid-save
+      setBusy(true); save.textContent = '正在保存…';
+      const request = correcting
+        ? api(`members/${me.id}/locations/${current.id}`, 'PATCH', {...stayFields(current), province_code: '', city_code: '', city_name: '', longitude: '', latitude: '',
+          ...body, started_on: current.started_on, label: payload.label, version: current.version, ...notePart(bio)})
+        : api(`members/${me.id}/locations`, 'POST', {...payload, ...notePart(bio)});
+      request.then(async () => {
+        if (left()) {ctx.onSavedAfterLeaving?.(); return;}  // saved: refresh the data, leave the new page alone
         notify(`已更新到${label}`);
-        await onDone();
+        await finish(save, '保存');
       }, async err => {
+        if (left()) return;
+        saving = false;
         setBusy(false);
         if (err.status === 409 && /备注/.test(err.message)) {
           refreshing = true; sync(); save.textContent = '保存';
@@ -188,7 +219,7 @@ export function renderUpdate(root, ctx) {
           return;
         }
         save.textContent = '保存';
-        error.textContent = `没保存成功：${err.message}。内容已保留，可以再点一次保存重试。`;
+        error.textContent = `没保存成功：${reason(err)}。内容已保留，可以再点一次保存重试。`;
       });
     };
     // With the keyboard up the sheet is short: lift the field to the top so its suggestions

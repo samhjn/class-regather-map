@@ -129,3 +129,34 @@ test('refresh after midnight uses the new server day for confirmation labels and
   assert.match(app.$('[data-member="2"] .tag').textContent, /近1周/);
   assert.match(app.$('[data-member="1"] .tag').textContent, /近3年/);
 });
+
+test('a member detail that arrives after the user went on to 我 does not pull the page back', async t => {
+  let release;
+  const held = new Promise(resolve => {release = resolve;});
+  const app = await openApp(t, {members: [person(1), person(2)], intercept: ({route}) => route === 'members/2' ? held : null});
+  app.input('#search', '同学2');
+  app.click('#list [data-member="2"]');
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-confirm')));
+  release();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(app.$('#sheet-title').textContent, '更新我的位置');
+  assert.ok(app.document.querySelector('#update-confirm'));
+});
+
+test('back from a member opened in search results restores the list title', async t => {
+  const app = await openApp(t, {members: [person(1), person(2)]});
+  app.input('#search', '同学2');
+  app.click('#list [data-member="2"]');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '同学2'));
+  app.click('#region-close');
+  await eventually(() => assert.match(app.$('#sheet-title').textContent, /位同学/));
+  assert.match(app.$('#sheet-summary').textContent, /全班 2 人/);
+});
+
+test('a lost connection reads as a Chinese network message, not the browser\'s English', async t => {
+  const app = await openApp(t, {intercept: ({route}) => route === 'members/1' ? Promise.reject(new TypeError('Failed to fetch')) : null});
+  app.click('#me-btn');
+  await eventually(() => assert.match(app.$('#toast').textContent, /网络/));
+  assert.doesNotMatch(app.$('#toast').textContent, /Failed to fetch/);
+});
