@@ -160,3 +160,47 @@ test('a lost connection reads as a Chinese network message, not the browser\'s E
   await eventually(() => assert.match(app.$('#toast').textContent, /网络/));
   assert.doesNotMatch(app.$('#toast').textContent, /Failed to fetch/);
 });
+
+test('back from a member returns to the panel height the list was at', async t => {
+  const app = await openApp(t, {members: [person(1), person(2)]});
+  app.click('#sheet .grab');                                     // wide: open to full
+  await eventually(() => assert.equal(app.$('#sheet').dataset.detent, 'full'));
+  app.click('#list [data-member="2"]');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '同学2'));
+  app.click('#region-close');
+  await eventually(() => assert.match(app.$('#sheet-title').textContent, /位同学/));
+  assert.equal(app.$('#sheet').dataset.detent, 'full');
+});
+
+test('switching 中国视野/世界视野 while an update draft is open keeps the draft and says why', async t => {
+  const app = await openApp(t);
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-confirm')));
+  app.click('#update-confirm');
+  app.input('#update-label', '新单位');
+  app.click('[data-scope="world"]');
+  assert.equal(app.$('#update-label').value, '新单位');
+  assert.match(app.$('#toast').textContent, /还没保存/);
+});
+
+test('logging in from 我 goes straight on to the update form', async t => {
+  const app = await openApp(t, {signedIn: false});
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#modal form')));
+  const form = app.document.querySelector('#modal form');
+  form.querySelector('[name="name"]').value = '同学1';
+  form.querySelector('[name="password"]').value = '123456';
+  app.submit('#modal form');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '更新我的位置'));
+});
+
+test('after moving abroad the map switches to 世界视野, where the new place is', async t => {
+  const app = await openApp(t);
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-move')));
+  app.click('#update-move');
+  app.input('#place-input', '日本');
+  app.click('.sugg [data-place="0"]');
+  app.click('#update-save');
+  await eventually(() => assert.ok(app.$('[data-scope="world"]').classList.contains('on')));
+});

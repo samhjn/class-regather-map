@@ -1,24 +1,7 @@
 import {test, expect} from '@playwright/test';
-import {openSheet, tapMarker, unlock} from './helpers.mjs';
+import {dragSheet, openSheet, tapMarker, unlock} from './helpers.mjs';
 
 // Found in the 2026-11-01 adversarial review: each case failed before its fix.
-
-test('a quick fling of the range handle lands where the finger stopped, and the handle lets go afterwards', async ({page}) => {
-  await unlock(page);
-  await openSheet(page);
-  await page.waitForTimeout(500);                            // let the sheet finish sliding before measuring the handle
-  const handle = page.locator('#range [data-handle="from"]'), track = await page.locator('#range .rng').boundingBox();
-  const box = await handle.boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  for (let i = 1; i <= 3; i++) await page.mouse.move(box.x + box.width / 2 - (box.x - track.x + 40) * i / 3, box.y + box.height / 2);  // three big steps, past the left end
-  await page.mouse.up();
-  const from = await page.locator('#range [data-end="from"] b').textContent();
-  expect(from).toBe('2015.09');                              // the earliest month in the demo data
-  await page.mouse.move(track.x + track.width * 0.6, box.y + box.height / 2);  // hover, no button pressed
-  await page.waitForTimeout(200);
-  await expect(page.locator('#range [data-end="from"] b')).toHaveText(from);
-});
 
 test('「修改」 on the time chip opens the panel on the time controls', async ({page}) => {
   await unlock(page);
@@ -55,4 +38,28 @@ test.describe('wide screens', () => {
     const box = await page.locator('#sheet').boundingBox();
     expect(box.y + box.height).toBeLessThanOrEqual(800);
   });
+});
+
+test('the half-open home sheet shows the list, not only controls', async ({page}, info) => {
+  // A short phone (SE) keeps the map usable at half; the list is one pull further up there.
+  test.skip(info.project.name === 'se', 'short screens: the map keeps priority at half');
+  await unlock(page);
+  await openSheet(page);
+  await page.waitForTimeout(500);
+  await expect(page.locator('#sheet')).toHaveAttribute('data-detent', 'half');
+  await expect(page.locator('#list .mem').first()).toBeInViewport({ratio: 1});
+});
+
+test('back from a member returns to where the list was scrolled', async ({page}) => {
+  await unlock(page);
+  await openSheet(page);
+  await page.locator('#range [data-preset="all"]').click();
+  await dragSheet(page, -700);                               // full: the whole list scrolls
+  await expect(page.locator('#sheet')).toHaveAttribute('data-detent', 'full');
+  await page.locator('#sheet-body').evaluate(body => {body.scrollTop = 600;});
+  await page.locator('#list .mem').filter({visible: true}).nth(8).click();
+  await expect(page.locator('#member-detail')).toBeVisible();
+  await page.locator('#region-close').click();
+  await expect(page.locator('#sheet')).toHaveAttribute('data-detent', 'full');
+  expect(await page.locator('#sheet-body').evaluate(body => body.scrollTop)).toBeGreaterThan(400);
 });

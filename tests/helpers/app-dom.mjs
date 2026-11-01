@@ -23,7 +23,7 @@ export async function eventually(check) {
 
 // Run the real app entry point against its real HTML. Only browser layout APIs and
 // the backend are substituted; no AMap key or network is needed for these UI flows.
-export async function openApp(t, {members = [person(1)], wide = true, intercept = () => null} = {}) {
+export async function openApp(t, {members = [person(1)], wide = true, intercept = () => null, signedIn = true} = {}) {
   const dom = new JSDOM(template.replace(/\{%.*?%\}/g, ''), {url: 'https://example.test/c/demo/'});
   const {window} = dom, {document} = window;
   const $ = selector => {
@@ -39,6 +39,8 @@ export async function openApp(t, {members = [person(1)], wide = true, intercept 
   const boot = {classroom: {name: '测试班', description: '', slug: 'demo'}, me: {id: 1, name: '同学1'},
     authenticated: true, unlocked: true, has_password: true, is_admin: true, today: '2026-10-30', map: {},
     countries: {CHN: '中国', JPN: '日本'}, provinces: {'330000': '浙江省', '440000': '广东省'}};
+  const signedInAs = boot.me;
+  if (!signedIn) Object.assign(boot, {me: null, authenticated: false, is_admin: false});
   let imported = [], records = structuredClone(members), snapshotDate = boot.today;
   const fetch = async (url, options = {}) => {
     const route = new URL(url).pathname.split('/api/')[1];
@@ -58,6 +60,13 @@ export async function openApp(t, {members = [person(1)], wide = true, intercept 
       const member = records.find(row => row.id === Number(route.split('/')[1]));
       Object.assign(member.location, data);
       body = {location: member.location};
+    } else if (/^members\/\d+\/locations$/.test(route) && options.method === 'POST') {
+      const member = records.find(row => row.id === Number(route.split('/')[1]));
+      member.location = {...stay(), ...data, id: 99, country_name: boot.countries[data.country_code] || '', confirmed_at: '2026-10-30T09:00:00+08:00'};
+      body = {location: member.location};
+    } else if (route === 'login') {
+      Object.assign(boot, {me: signedInAs, authenticated: true});
+      body = {ok: true};
     } else if (route === 'admin/settings') body = {name: '测试班', description: '', has_password: true};
     else if (route === 'admin/import') {
       if (data.commit) records.push(...structuredClone(imported));

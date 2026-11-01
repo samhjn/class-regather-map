@@ -178,7 +178,12 @@ def sign_in(request, classroom, data):
 
 @endpoint(('POST',), access='public')
 def sign_out(request, classroom, data):
+    # Logging out ends who you are, not the view code this device already entered:
+    # logout() flushes the session, so carry the gate stamps over (a changed code still
+    # invalidates them, since each stamp holds the gate_version it was granted under).
+    gates = {key: value for key, value in request.session.items() if key.startswith('gate:')}
     logout(request)
+    request.session.update(gates)
     return {'ok': True}
 
 
