@@ -32,24 +32,41 @@ test('editing only a note preserves the existing place without requiring another
   assert.equal(writes(app)[0].data.note, '周末有空');
 });
 
-for (const alreadyAll of [false, true]) test(`importing an older location updates All and its axis (already selected: ${alreadyAll})`, async t => {
+for (const alreadyAll of [false, true]) test(`importing an older location updates All (already selected: ${alreadyAll})`, async t => {
   const app = await openApp(t);
   if (alreadyAll) app.click('[data-preset="all"]');
   await app.importMembers([person(2, stay({id: 2, confirmed_at: '2015-09-01T00:00:00+08:00'}))]);
   if (!alreadyAll) app.click('[data-preset="all"]');
-  assert.equal(app.$('[data-end="from"] b').textContent, '2015.09');
-  assert.equal(app.$('#count-china').textContent, '2');
-  assert.equal(app.$('[data-handle="from"]').style.left, '0%');
+  assert.equal(app.$('#sheet-title').textContent, '2 位同学');
+  assert.equal(app.document.querySelector('[data-end], [data-handle]'), null);
 });
 
-test('import refresh preserves a custom time range', async t => {
+test('import refresh preserves the selected preset and only three options exist', async t => {
   const app = await openApp(t);
-  app.click('[data-end="from"]');
-  app.click('.picker [data-year="2025"]');
-  app.click('.picker [data-month="1"]');
+  app.click('[data-preset="1y"]');
   await app.importMembers([person(2, stay({id: 2, confirmed_at: '2015-09-01T00:00:00+08:00'}))]);
-  assert.equal(app.$('[data-end="from"] b').textContent, '2025.01');
-  assert.equal(app.$('#count-china').textContent, '1');
+  assert.equal(app.$('[data-preset="1y"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(app.$('#sheet-title').textContent, '1 位同学');
+  assert.deepEqual([...app.document.querySelectorAll('#range button')].map(el => el.textContent), ['近一年', '近三年', '全部']);
+  assert.equal(app.document.querySelector('#range [role="slider"], #range .picker'), null);
+});
+
+test('viewport shortcuts preserve all classmates and the within-bucket order', async t => {
+  const members = [person(1), person(2, stay({province_code: '810000', city_code: '', city_name: '', province_name: '香港特别行政区'})),
+    person(3, stay({country_code: 'SGP', country_name: '新加坡', province_code: '', city_code: ''})), person(4)];
+  const app = await openApp(t, {members});
+  const ids = () => [...app.document.querySelectorAll('#list [data-member]')].map(el => el.dataset.member);
+  app.click('.grab');
+  const before = ids();
+  assert.equal(before.length, 4);
+  assert.match(app.$('#list').textContent, /香港/);
+  assert.match(app.$('#list').textContent, /新加坡/);
+  for (const scope of ['world', 'china']) {
+    app.click(`[data-scope="${scope}"]`); app.click('.grab');
+    assert.deepEqual(ids(), before);
+    assert.equal(app.$('#sheet-title').textContent, '4 位同学');
+  }
+  assert.doesNotMatch(app.$('#list').textContent, /2026|2025|境内|境外/);
 });
 
 for (const scope of ['china', 'world']) test(`unplaced members remain reachable when no location is in range (${scope})`, async t => {
@@ -99,4 +116,16 @@ test('footprint -> update -> back still restores the footprint', async t => {
   app.click('#region-close');
   await eventually(() => assert.ok(app.document.querySelector('#member-detail')));
   assert.equal(app.$('#sheet-title').textContent, '同学1');
+});
+
+test('refresh after midnight uses the new server day for confirmation labels and cutoffs', async t => {
+  const app = await openApp(t, {members: [person(1, stay({confirmed_at: '2025-10-30T12:00:00+08:00'}))]});
+  app.click('[data-preset="1y"]');
+  assert.equal(app.$('#sheet-title').textContent, '1 位同学');
+  app.advanceDay('2026-10-31');
+  await app.importMembers([person(2, stay({id: 2, confirmed_at: '2026-10-31T08:00:00+08:00'}))]);
+  app.click('.grab');
+  assert.equal(app.$('#sheet-title').textContent, '1 位同学');
+  assert.match(app.$('[data-member="2"] .tag').textContent, /近1周/);
+  assert.match(app.$('[data-member="1"] .tag').textContent, /近3年/);
 });

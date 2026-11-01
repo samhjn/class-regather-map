@@ -20,12 +20,6 @@ export async function unlock(page) {
 
 export const bootToday = page => page.evaluate(async () => (await (await fetch('api/bootstrap', {credentials: 'same-origin'})).json()).today);
 
-// Same arithmetic as filter.js presetRange, kept independent on purpose.
-export function presetLabel(today, years) {
-  const index = Number(today.slice(0, 4)) * 12 + Number(today.slice(5, 7)) - 1 - years * 12;
-  return `${Math.floor(index / 12)}.${String(index % 12 + 1).padStart(2, '0')}`;
-}
-
 export async function dragSheet(page, dy) {
   const grab = await page.locator('#sheet .grab').boundingBox();
   const x = grab.x + grab.width / 2, y = grab.y + grab.height / 2;

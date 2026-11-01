@@ -25,14 +25,14 @@
     <div id="map" class="map" aria-label="同学分布地图"></div>
     <p id="map-status" class="map-status" role="status" hidden></p>
     <div class="top">
-      <div id="scope-seg" class="seg" role="group" aria-label="境内或境外">
-        <button type="button" data-scope="china" class="on" aria-pressed="true">境内<em id="count-china">0</em></button>
-        <button type="button" data-scope="world" aria-pressed="false">境外<em id="count-world">0</em></button>
+      <div id="scope-seg" class="seg" role="group" aria-label="地图视野">
+        <button type="button" data-scope="china" class="on" aria-pressed="true">中国视野</button>
+        <button type="button" data-scope="world" aria-pressed="false">世界视野</button>
       </div>
       <button id="me-btn" class="mebtn" type="button"><i aria-hidden="true">我</i>更新位置<span class="dot" hidden aria-label="位置很久没确认了"></span></button>
     </div>
     <button id="range-chip" class="fchip" type="button" hidden></button>
-    <button id="fit-all" class="fit-all" type="button" hidden>看全部</button>
+    <button id="fit-all" class="fit-all" type="button" hidden>回到全图</button>
     <section id="sheet" class="sheet" data-detent="peek" aria-label="同学名单">
       <button class="grab" data-drag type="button" aria-label="展开或收起名单" aria-expanded="false"></button>
       <div id="sheet-body">

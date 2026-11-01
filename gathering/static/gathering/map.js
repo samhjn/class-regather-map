@@ -1,5 +1,5 @@
 import {chinaCountry, cityKey, municipalities, provinceKey} from './logic.js';
-import {REGION_NAMES, bucket, cluster, countByKey, dotSize, inRange, levelOf, memberKey} from './filter.js';
+import {REGIONS, REGION_NAMES, bucket, cluster, countByKey, dotSize, inRange, levelOf, memberKey} from './filter.js';
 import {countryCenters} from './country-centers.js';
 
 let loading;
@@ -89,7 +89,7 @@ export class ClassMap {
     if (divisions?.then) divisions.then(loaded => {this.divisions = loaded; this.renderMarkers(); if (this.wantsFit && !this.userMoved) this.fit();}, () => {});
     else {this.divisions = divisions; this.renderMarkers();}
   }
-    setLevel(level) {
+  setLevel(level) {
     if (level === this.level) return;
     this.level = level;
     this.selected = null;
@@ -121,9 +121,9 @@ export class ClassMap {
     const groups = new Map();
     for (const member of this.members) {
       const loc = member.location;
-      if (!loc || levelOf(loc) !== this.level || !inRange(loc.confirmed_at, this.range)) continue;
-      const key = memberKey(loc, this.level);
-      const group = groups.get(key) || {key, n: 0, coords: [], loc};
+      if (!loc || !inRange(loc.confirmed_at, this.range)) continue;
+      const level = levelOf(loc), key = memberKey(loc);
+      const group = groups.get(key) || {key, level, n: 0, coords: [], loc};
       group.n++;
       if (loc.longitude != null && loc.latitude != null) group.coords.push([Number(loc.longitude), Number(loc.latitude)]);
       groups.set(key, group);
@@ -132,7 +132,7 @@ export class ClassMap {
     let unplaced = 0;
     for (const group of groups.values()) {
       const place = this.place(group);
-      if (place?.position?.every(Number.isFinite)) points.push({key: group.key, n: group.n, ...place});
+      if (place?.position?.every(Number.isFinite)) points.push({key: group.key, level: group.level, n: group.n, ...place});
       else unplaced += group.n;  // reported, so the sheet can say the map is short by N people
     }
     this.unplaced = unplaced;
@@ -141,7 +141,8 @@ export class ClassMap {
   place({key, coords, loc}) {
     const usable = coords.filter(pair => pair.every(Number.isFinite));
     let position = usable.length ? [0, 1].map(i => usable.reduce((sum, pair) => sum + pair[i], 0) / usable.length) : null;
-    if (this.level === 'world') return {position: position || countryCenters[key], label: REGION_NAMES[key] || loc.country_name || key};
+    if (levelOf(loc) === 'world') return {position: position || countryCenters[key], label: loc.country_name || key};
+    if (REGIONS[key]) return {position: position || this.divisions?.cities.get(key)?.center || this.divisions?.provinces.get(key)?.center || countryCenters[REGIONS[key]], label: REGION_NAMES[REGIONS[key]]};
     if (key.startsWith('prov:')) {
       const province = this.divisions?.provinces.get(loc.province_code);
       // The provider's province centre is the capital; nudge the dot so it never sits
@@ -170,7 +171,7 @@ export class ClassMap {
     const merged = members.length > 1;
     const size = dotSize(n);
     const position = [0, 1].map(i => members.reduce((sum, point) => sum + point.position[i] * point.n, 0) / n);
-    const label = merged ? `${members[0].label}等 ${members.length} 城` : members[0].label;
+    const label = merged ? `${members[0].label}等 ${members.length} 地` : members[0].label;
     const selected = !merged && members[0].key === this.selected;
     const content = document.createElement('div');
     content.className = `pt${merged ? ' cl' : ''}${selected ? ' sel' : ''}`;
@@ -179,8 +180,8 @@ export class ClassMap {
       `background:${RAMP[bucket(n)]};color:${bucket(n) >= 2 ? '#fff' : '#17153a'}">${n}</div><span class="nm">${escapeHTML(label)}</span>`;
     content.addEventListener('click', event => {
       event.stopPropagation();
-      if (!merged) {this.onPick(members[0].key, this.level); return;}
-      this.map.setFitView(members.map(point => new this.A.Marker({position: point.position})), false, this.padding(), 8);  // city level, not street level
+      if (!merged) {this.onPick(members[0].key, members[0].level); return;}
+      this.map.setFitView(members.map(point => new this.A.Marker({position: point.position})), false, this.padding(), 11);  // enough to separate nearby cities such as Shenzhen and Hong Kong
       this.onClusterPick(members.map(point => point.key));
     });
     const marker = new this.A.Marker({position, content, offset: new this.A.Pixel(-size / 2, -size / 2), zIndex: selected ? 130 : 120, bubble: false});
@@ -205,17 +206,23 @@ export class ClassMap {
   fit() {
     this.wantsFit = true;
     this.userMoved = false;  // an explicit fit hands the view back to the app
-    if (!this.markers.length) return;
-    // AMap 1.4 cannot zoom out past 3, so continents apart do not fit one phone screen;
-    // centring on their midpoint would show neither. Centre on the biggest group instead.
-    const lngs = this.markers.map(marker => marker.spot[0]);
-    if (this.level === 'world' && Math.max(...lngs) - Math.min(...lngs) > WORLD_SPAN) {
-      const biggest = this.markers.reduce((best, marker) => marker.count > best.count ? marker : best);
-      this.map.setZoomAndCenter(3, biggest.spot);
+    // Both views retain all dots. Only the camera's fit targets differ.
+    const points = this.points().filter(point => this.level === 'world' || point.level === 'china');
+    if (!points.length) {
+      this.map.setZoomAndCenter(this.level === 'world' ? 3 : 4, [108, 33]);
       return;
     }
-    this.map.setFitView(this.markers, false, this.padding(), 9);
+    // AMap 1.4 cannot zoom out past 3; centre on the biggest group when all dots
+    // cannot fit one phone screen. Other places remain in the searchable roster.
+    const lngs = points.map(point => point.position[0]);
+    if (this.level === 'world' && Math.max(...lngs) - Math.min(...lngs) > WORLD_SPAN) {
+      const biggest = points.reduce((best, point) => point.n > best.n ? point : best);
+      this.map.setZoomAndCenter(3, biggest.position);
+      return;
+    }
+    this.map.setFitView(points.map(point => new this.A.Marker({position: point.position})), false, this.padding(), 9);
   }
+
   destroy() {
     for (const event of markerEvents) this.map.off(event, this.refreshMarkers);
     this.map.destroy();
