@@ -7,6 +7,10 @@ staticfiles/
 artifacts/
 node_modules/
 .DS_Store
+.fc/
+.s/
+.env.*
+!.env.example
 
 # e2e
 e2e*.sqlite3

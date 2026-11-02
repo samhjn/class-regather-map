@@ -52,7 +52,7 @@ python manage.py seed_demo
 
 1. 在[高德开放平台](https://console.amap.com/)创建「Web端（JS API）」Key，设置部署域名白名单。
 2. 设置 `AMAP_JS_KEY`。本地调试还可设置 `AMAP_SECURITY_JS_CODE`（仅 DEBUG 模式使用）。
-3. 生产配置同源安全代理 `AMAP_SERVICE_HOST=/_AMapService`，将 securityJsCode 仅放在代理服务器配置中。完整示例见 [docs/nginx.conf.example](docs/nginx.conf.example)。
+3. 生产配置同源安全代理 `AMAP_SERVICE_HOST=/_AMapService`，将 securityJsCode 仅放在服务端。nginx 方案见 [docs/nginx.conf.example](docs/nginx.conf.example)，FC 内置代理见 [docs/fc-deployment.md](docs/fc-deployment.md)。
 4. 配置后检查世界、中国、边境省份、港澳台、南海及手机窄屏下的地图来源和审图号显示。
 
 地图使用高德官方标准底图和 `DistrictLayer.World / Country / Province`。选用文档明确提供 `getDistrictByContainerPos` 的 JS API 1.4.15；将其集中封装在 `map.js`，便于将来替换。没有引入外部 GeoJSON、Natural Earth、OSM 或自行重绘中国边界。区域着色仅表达人数，边界几何与线型交给 SDK。
@@ -62,6 +62,8 @@ python manage.py seed_demo
 **使用官方底图不等同于整个业务自动获得地图审核或运营许可。** 不移除或遮挡 SDK 的版权、审图号与相关标识；按供应商要求检查使用许可、配额与业务场景。详细来源和上线检查见 [docs/maps.md](docs/maps.md)。未提供真实 Key 的环境只能验证降级界面，不能据此声称已验证真实地图加载和边界展示。
 
 ## MySQL / Docker 部署
+
+阿里云函数计算 FC 3.0 部署见 [docs/fc-deployment.md](docs/fc-deployment.md)：提供 Linux/Python 3.12 ZIP 打包、函数配置模板、独立迁移与更新工具。FC 使用 RDS 内网，不使用本地 SQLite。
 
 应用依赖标准 MySQL 事务、唯一约束及行锁。对于一个班级，MySQL 更适合身份认领、导入与时间区间更新；本版不实现 OTS 适配。需要迁往 OTS 时应重新实现条件写、并发控制和历史查询索引，不可仅替换数据库连接串。
 
@@ -130,6 +132,7 @@ docker compose exec app python manage.py clearratelimits
 ## 测试
 
 ```bash
+python -m pip install -r requirements.txt -r requirements-fc-tools.txt
 DEBUG=1 python manage.py collectstatic --noinput
 DEBUG=1 python manage.py check
 DEBUG=1 python manage.py makemigrations --check --dry-run
@@ -139,11 +142,13 @@ npm run check
 npm test
 ```
 
-CI 分别测试 SQLite 和 MySQL 8.4。核心覆盖：班级隔离、所有写接口权限、CSRF、密码轮换、认领过期和重放、区间边界与重叠、乐观锁、导入预览与回滚、行政区归一化。MySQL 作业额外执行并发区间写入测试。
+CI 分别测试 SQLite 和 MySQL 8.4，并对 Linux FC 部署 ZIP 进行构建和必要文件检查。核心覆盖：班级隔离、所有写接口权限、CSRF、密码轮换、认领过期和重放、区间边界与重叠、乐观锁、导入预览与回滚、行政区归一化、高德代理权限/上游白名单/限流、跨源会话读取防护、可信代理下的客户端限流、FC 维护函数异常清理。部署工具测试使用模拟客户端，不访问云资源；部署 SDK 仍不进入应用代码包。MySQL 作业额外执行并发区间写入测试。
 
 前端测试使用 Node.js 22.22.2+（22.x）或 24.15.0+（24.x）。`npm test` 包含无需高德 Key 的 DOM 回归测试，覆盖地点选择、导入后的筛选口径、五档排序、统一地理视野、未填位置名单与页面返回；地图渲染和手势仍由下面的 Playwright 测试验证。
 
 2026-10-29 使用真实高德开发凭据与虚构同学数据完成浏览器联调：底图与审图号、世界国界点击进入中国、中国省界、浙江市界点击筛选杭州、历史日期切换、个人足迹编号和连线、城市检索与地图选点回填。该次联调通过只读前端测试服务进行，未覆盖浏览器提交至 Django、生产安全代理、正式域名或真实班级数据；业务写入由上述后端测试验证。凭据与联调数据不提交到仓库。
+
+2026-10-30 完成 FC + RDS 部署及 HTTPS 测试子域名联调：浏览器提交班级查看码、中国底图与浙江行政区、历史日期切换、个人足迹编号及连线均通过；同源高德代理的行政区与地理编码接口返回成功。安全密钥只保存在服务端。预览使用带查看密码的独立虚构班级，没有正式名单或默认管理员账号。部署步骤见 [FC 部署说明](docs/fc-deployment.md)。
 
 端到端测试（Playwright，手机尺寸 390×844 与 375×667）使用独立的 `e2e-<端口>.sqlite3` 与虚构演示数据（`seed_demo`），每次运行重建：
 
@@ -157,11 +162,11 @@ npm run e2e -- recency-unified.spec.mjs
 
 ## 边界
 
-- 尚未接入真实班级数据或生产数据库；生产环境的高德凭据、安全代理与域名仍需独立配置。
+- 已验证 FC、RDS、自定义域名和高德安全代理；尚未接入真实班级数据。每个新环境仍需独立配置数据库、地图凭据与 HTTPS，并维护证书续签。
 - 已预留多班级数据隔离，但没有自助开班、租户计费、跨班账号合并或租户域名管理。
 - 单点位置由用户主动选择，不后台跟踪。城市级分享足以使用主要功能。共享班级密码意味着所有持有密码的人都能浏览班级资料。
 - 省市列表由高德行政区服务提供，失败时可以手工填写城市名及市级行政区代码。服务配额、海外覆盖与特定地区数据可用性取决于供应商账号。
-- 应用认证限流持久化在数据库，默认使用 REMOTE_ADDR，不盲目信任来路不明的 X-Forwarded-For；反代部署中可能共享一个 IP 限额。大型部署应在可信入口增加按真实客户端 IP 的限流。
+- 应用认证及内置高德代理限流持久化在数据库；默认直连使用 REMOTE_ADDR，FC 仅在配置可信代理跳数后使用转发链右侧地址。不盲目信任 X-Forwarded-For；新增 CDN/反代应验证真实请求链，大型部署应在可信入口限流。FC 默认 CORS 回显需要应用层跨源防护，详见部署验收说明。
 
 ## 许可证
 
