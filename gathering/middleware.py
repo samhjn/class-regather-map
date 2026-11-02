@@ -1,6 +1,26 @@
 """Private responses and browser-side same-origin protection behind FC ingress."""
 
+from secrets import compare_digest
+
+from django.conf import settings
 from django.http import JsonResponse
+
+from .client_ip import normalized_ip
+
+
+def _untrusted_esa_origin(request):
+    if not settings.ESA_ORIGIN_SECRET:
+        return False
+    # ESA must overwrite both values on ALL origin-bound requests, not merely
+    # add them. A forged browser header must never be accepted as proof.
+    if not compare_digest(request.META.get('HTTP_X_REGATHER_ORIGIN_TOKEN', ''),
+                          settings.ESA_ORIGIN_SECRET):
+        return True
+    try:
+        normalized_ip(request.META.get('HTTP_X_REGATHER_CLIENT_IP', ''))
+    except ValueError:
+        return True
+    return False
 
 
 def _cross_origin_browser_request(request):
@@ -26,8 +46,8 @@ class PrivateResponseMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        if _cross_origin_browser_request(request):
-            response = JsonResponse({'error': '仅允许同源访问'}, status=403)
+        if _untrusted_esa_origin(request) or _cross_origin_browser_request(request):
+            response = JsonResponse({'error': '仅允许同源或可信入口访问'}, status=403)
             response['Cache-Control'] = 'private, no-store'
             response['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
             return response
