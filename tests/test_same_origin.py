@@ -56,6 +56,8 @@ class SameOriginTests(TestCase):
             self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_CLIENT_IP='203.0.113.41').status_code, 403)
             self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_ORIGIN_TOKEN='forged',
                                               HTTP_X_REGATHER_CLIENT_IP='203.0.113.41').status_code, 403)
+            self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_ORIGIN_TOKEN='\u00e9',
+                                              HTTP_X_REGATHER_CLIENT_IP='203.0.113.41').status_code, 403)
             self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_ORIGIN_TOKEN=secret).status_code, 403)
             self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_ORIGIN_TOKEN=secret,
                                               HTTP_X_REGATHER_CLIENT_IP='bad-ip').status_code, 403)
