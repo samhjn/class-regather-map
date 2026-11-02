@@ -12,7 +12,10 @@ from .models import Classroom
 from .services import Problem, throttle
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-REST_ENDPOINTS = frozenset(('v3/config/district', 'v3/geocode/geo', 'v3/geocode/regeo'))
+REST_ENDPOINTS = frozenset((
+    'v3/config/district', 'v3/geocode/geo', 'v3/geocode/regeo',
+    'v3/assistant/coordinate/convert',  # AMap.convertFrom() for device GPS
+))
 
 
 def upstream_for(resource):
