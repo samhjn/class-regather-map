@@ -49,7 +49,8 @@ class AMapProxyTests(TestCase):
         self.unlock()
         for resource, host in [('v4/map/styles', 'webapi.amap.com'), ('v3/vectormap', 'fmap01.amap.com'),
                                ('v3/config/district', 'restapi.amap.com'), ('v3/geocode/geo', 'restapi.amap.com'),
-                               ('v3/geocode/regeo', 'restapi.amap.com')]:
+                               ('v3/geocode/regeo', 'restapi.amap.com'),
+                               ('v3/assistant/coordinate/convert', 'restapi.amap.com')]:
             response = self.client.get('/_AMapService/' + resource,
                 {'key': 'test-js-key', 'jscode': ['malicious', 'duplicate'], 'JSCODE': 'mixed-case', 'keywords': '杭州'},
                 HTTP_AUTHORIZATION='Bearer private-token')
@@ -74,11 +75,25 @@ class AMapProxyTests(TestCase):
                             ('v3/config/district', {'callback': 'alert(1)'}),
                             ('v3/config/district', {'keywords': 'x' * 17000}),
                             ('v3/place/text', {}), ('v3/geocode/geo/extra', {}),
+                            ('v3/assistant/coordinate/convert/extra', {}),
                             ('v4/random/endpoint', {})]:
             with self.subTest(path=path, query=list(query)):
                 self.assertEqual(self.client.get('/_AMapService/' + path, query).status_code, 400)
         self.assertEqual(self.client.post(self.url).status_code, 405)
         self.mock.assert_not_called()
+
+    def test_gps_conversion_uses_rest_api_quota_not_tile_quota(self):
+        self.unlock()
+        url = '/_AMapService/v3/assistant/coordinate/convert'
+        with self.settings(AMAP_PROXY_API_LIMIT=1):
+            response = self.client.get(url, {'locations': '116.3,39.9', 'coordsys': 'gps'})
+            self.assertEqual(response.status_code, 200)
+            args, _ = self.mock.return_value.request.call_args
+            self.assertEqual(urlsplit(args[1]).path, '/v3/assistant/coordinate/convert')
+            query = parse_qs(urlsplit(args[1]).query)
+            self.assertEqual(query['coordsys'], ['gps'])
+            self.assertEqual(query['jscode'], ['server-only-security'])
+            self.assertEqual(self.client.get(url).status_code, 429)
 
     def test_jsonp_has_executable_content_type_with_nosniff(self):
         self.unlock()
