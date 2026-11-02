@@ -72,6 +72,25 @@ python scripts/fc_manage.py bootstrap --account <阿里云账号ID> --region cn-
 
 在函数环境变量 `ALLOWED_HOSTS` 中追加准确域名，在 `CSRF_TRUSTED_ORIGINS` 中追加 `https://域名`。保留 `SECURE_SSL_REDIRECT=1` 和 Secure Cookie，通过实际浏览器检查首页跳转和表单。
 
+### 跨域访问边界（必须验收）
+
+FC 旧版默认 CORS 行为会回显浏览器请求中的 `Origin`，并可能附加 `Access-Control-Allow-Credentials: true`。同一注册域下不同子域（例如 `other.example.com` 与 `class.example.com`）在 `SameSite=Lax` 下仍属 same-site，因此不能靠 Cookie 的 SameSite 设置保护跨源读取。
+
+应用的 `PrivateResponseMiddleware` 会拒绝 `Origin` 与实际 HTTPS scheme/Host 不一致的请求；对班级 API、后台和高德代理，也通过 `Sec-Fetch-Site` 阻止跨源子资源请求，但不拦截从其他网站跳转进入班级页面的顶层导航。**由于 FC 网关可能仍给 403 响应回显 CORS Header，验收标准是不会泄露私有内容，而不是单凭响应中不存在 CORS Header。** 部署时 `TRUST_PROXY=1` 的前提是网关可信地覆盖 `X-Forwarded-Proto`，并且 `ALLOWED_HOSTS` 只包含实际域名。
+
+FC 的网关级 `corsConfig`（API Configured CORS）目前属于邀测能力，未开通的账号可能仍执行默认回显；应用安全不能依赖该功能。若账号已开通，建议额外配置仅允许应用的 HTTPS origin，且不向其他 origin 允许凭证。见[官方 CORS 说明](https://www.alibabacloud.com/help/en/functioncompute/http-triggers-overview)。
+
+使用**已解锁的测试班级会话**验证，下例的 cookie 文件应仅放在本机安全位置，不打印到 CI 日志或提交到仓库：
+
+```bash
+# 同一份有效测试会话：请求同源时应返回 200；跨源 Origin 必须返回 403。
+curl -si -b /secure/path/test-cookies.txt https://class.example.com/c/our-class/api/snapshot -H 'Origin: https://class.example.com'
+curl -si -b /secure/path/test-cookies.txt https://class.example.com/c/our-class/api/snapshot -H 'Origin: https://other.example.com'
+# 无 Origin、但声明为跨源子资源的浏览器请求也必须被拒绝。
+curl -si -b /secure/path/test-cookies.txt https://class.example.com/c/our-class/api/snapshot -H 'Sec-Fetch-Site: same-site' -H 'Sec-Fetch-Mode: cors'
+```
+
+
 FC 无需 nginx 即可使用内置高德安全代理。在控制台设置以下环境变量，并将函数 `internetAccess` 设为 `true`：
 
 ```text
@@ -79,9 +98,12 @@ AMAP_JS_KEY=<高德 Web 端 JS API Key>
 AMAP_PROXY_ENABLED=1
 AMAP_PROXY_SECURITY_CODE=<与该 Key 配套的 securityJsCode>
 AMAP_SERVICE_HOST=/_AMapService
+# 以下为每一班级、每一客户端 IP 在 15 分钟内的预算；可按访问量调整
+AMAP_PROXY_TILE_LIMIT=3000
+AMAP_PROXY_API_LIMIT=300
 ```
 
-代理只允许已有班级访问权限的浏览器会话，重新检查班级锁定状态。上游限定为高德官方 `webapi.amap.com`、`fmap01.amap.com` 和 `restapi.amap.com`，使用 HTTPS，不跟随重定向，不转发浏览器 Cookie 或 Authorization；客户端不能覆盖服务端安全密钥。请求有长度、超时和响应体上限。JS Key 会用于浏览器 SDK，安全密钥仅留在 FC 环境变量中。高德控制台的域名白名单也需包含网页域名。参见[高德安全代理说明](https://developer.amap.com/api/javascript-api/guide/abc/prepare)。
+代理只允许已有班级访问权限的浏览器会话，重新检查班级锁定状态。上游固定为高德官方 `webapi.amap.com`、`fmap01.amap.com` 和 `restapi.amap.com`，且路径限定为 `v4/map/styles`、`v3/vectormap`、`v3/config/district`、`v3/geocode/geo` 和 `v3/geocode/regeo`（地图资源可有子路径）；未来变更 SDK 时需先确认新请求并按需扩充白名单。使用 HTTPS，不跟随重定向，不转发浏览器 Cookie 或 Authorization；客户端不能覆盖服务端安全密钥。请求有长度、超时和响应体上限，还使用现有 RDS 限流桶分别限制瓦片与 REST API；达到限制返回 429。由于每次请求会产生一次数据库计数写入，访问量大时应转向入口限流或独立缓存服务。JS Key 会用于浏览器 SDK，安全密钥仅留在 FC 环境变量中。高德控制台的域名白名单也需包含网页域名。参见[高德安全代理说明](https://developer.amap.com/api/javascript-api/guide/abc/prepare)。
 
 若继续使用独立 nginx 代理，保持 `AMAP_PROXY_ENABLED=0`，使用 `docs/nginx.conf.example`。生产环境不把安全密钥放进 `AMAP_SECURITY_JS_CODE` 或前端代码。
 
@@ -93,6 +115,7 @@ AMAP_SERVICE_HOST=/_AMapService
 - 只在 FC 可信入口后设置 TRUST_PROXY=1。新增代理时，应重新验证 HTTPS 判断、Host、CSRF 来源与 Cookie。
 - 客户端限流独立使用 `TRUSTED_PROXY_HOPS`：`REGATHER_FC=1` 时默认 1，其他环境默认 0（只使用连接对端地址），可显式设为 0–8。FC 模板声明为 1，从 `X-Forwarded-For` 右侧取网关写入的地址；客户端伪造的左侧前缀不参与计数。解锁、个人登录/认领和后台登录共用此解析，账号级限流继续生效。
 - 启用转发地址信任的前提是应用端口只能由这些代理访问，且入口覆盖或追加真实对端 IP。新增 CDN/WAF/nginx 后应先验证实际转发链，按固定可信层数配置，不能直接取最左侧值或盲目增加层数。缺失、过短或可信部分无效的头回退到连接对端。上线验收应确认不同来源 IP 独立计数，伪造 XFF 前缀无法绕过限流；参见 [XFF 的安全解析规则](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-For)。
+- **真实网关验收不能由单元测试代替**：在隔离的预览班级，从不同公网 IP 进行少量合法的地图请求，再使用伪造前缀的 `X-Forwarded-For` 重试，结合隔离环境的限流桶验证计数归属；如果 FC 网关并不覆盖/追加真实来源，先设 `TRUSTED_PROXY_HOPS=0`，并在可信入口建立限流，不要照搬 1 跳的模板。不要在真实班级上使用大量失败登录来做此测试。
 - Gunicorn 使用 /tmp 保存工作文件，访问日志不记录查询串或 Cookie；不向应用函数注入长期 AK/SK。
 - 后续需要定期运行 clearsessions / clearratelimits，并监控 RDS 连接数和备份状态；本次部署不自动添加定时任务。
 - 默认验证地址和真实高德地图验证是两个独立环节。正式域名、高德安全代理与真实班级名单不由部署脚本自动创建。
