@@ -80,7 +80,7 @@ python scripts/fc_manage.py bootstrap --account <阿里云账号ID> --region cn-
 2. 在 ESA 的 **规则 → 转换规则 → 修改请求头 → ESA 到源站** 中，为此站点所有回源请求设置两条**添加（覆盖同名客户端值）**规则：
    - `X-Regather-Origin-Token`：**静态**值，等于上一步生成的令牌。
    - `X-Regather-Client-IP`：**动态**表达式 `ip.src`，让 ESA 写入请求者的真实 IP。不要从原请求照搬这两个头，也不要使用“变更（只在原头存在时生效）”。
-3. 在 FC 的应用函数环境变量设置 `ESA_ORIGIN_SECRET=<相同令牌>`，并建议将 `TRUSTED_PROXY_HOPS=0`；ESA 模式下应用只使用受令牌保护的 `X-Regather-Client-IP`，不再需要推断 ESA/FC 的 XFF 代理层数。部署该配置前要确保 ESA 回源规则已生效，否则所有请求（包括静态资源、健康检查）都会被应用返回 403。
+3. 在 FC 的应用函数环境变量设置 `ESA_ORIGIN_SECRET=<相同令牌>`，并建议将 `TRUSTED_PROXY_HOPS=0`；ESA 模式下应用只使用受令牌保护的 `X-Regather-Client-IP`，不再需要推断 ESA/FC 的 XFF 代理层数。部署该配置前要确保 ESA 回源规则已生效，否则业务接口和健康检查会被应用返回 403；注意 WhiteNoise 在本项目中先于业务安全中间件处理静态文件，因此静态资源可能仍能从 FC 直接访问，但不包含私有班级数据。
 4. 绑定真实 HTTPS 域名，确认 Host、`X-Forwarded-Proto` 和 Django 的 `ALLOWED_HOSTS` 配置正确。必须在 ESA 中禁用 `/c/`、`/admin/`、`/_AMapService/` 等私有路径的缓存，并确认遵循 `Cache-Control: private, no-store`；静态文件可独立缓存。
 5. 验证经过 ESA 的正常访问为 200，而直接访问 FC 默认验证 URL（未携带内部令牌）为 403。模拟浏览器伪造 `X-Regather-Origin-Token` 或 `X-Regather-Client-IP` 时，**由 ESA 回源规则覆盖请求头**，不得让客户端控制它们。令牌泄漏后应同时在 ESA 和 FC 中轮换。
 
