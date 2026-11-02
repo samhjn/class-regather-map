@@ -37,12 +37,18 @@ class Smoke:
         print(f'PASS {label}: HTTP {status}')
         return body
 
-    def service_ok(self, label, path):
-        body = self.expect(label, path, 200)
+    def json_ok(self, label, path, **options):
+        body = self.expect(label, path, 200, **options)
         try:
             data = json.loads(body)
         except (ValueError, UnicodeDecodeError) as error:
             raise RuntimeError(f'{label}: response is not JSON') from error
+        if not isinstance(data, dict):
+            raise RuntimeError(f'{label}: response is not a JSON object')
+        return data
+
+    def service_ok(self, label, path):
+        data = self.json_ok(label, path)
         if str(data.get('status')) != '1':
             raise RuntimeError(f'{label}: upstream did not report successful AMap status')
         print(f'PASS {label}: AMap status=1')
@@ -64,19 +70,27 @@ def main():
     api = root + 'api/'
     origin = f'{parsed.scheme}://{parsed.netloc}'
 
-    smoke.expect('database health through public HTTPS', 'healthz/', 200)
+    health = smoke.json_ok('database health through public HTTPS', 'healthz/')
+    if health.get('status') != 'ok':
+        raise RuntimeError('database health returned an unexpected status')
     smoke.expect('class page and CSRF cookie', root, 200)
     token = next((cookie.value for cookie in smoke.jar if cookie.name == 'csrftoken'), '')
     if not token:
         raise RuntimeError('missing csrf cookie on class page')
     password = getpass('Isolated staging class viewing password: ')
-    smoke.expect('unlock test class', api + 'unlock', 200, method='POST',
-                 headers={'Content-Type': 'application/json', 'X-CSRFToken': token,
-                          'Origin': origin}, data={'password': password})
+    unlocked = smoke.json_ok('unlock test class', api + 'unlock', method='POST',
+                             headers={'Content-Type': 'application/json', 'X-CSRFToken': token,
+                                      'Origin': origin}, data={'password': password})
     del password
-    smoke.expect('unlocked bootstrap', api + 'bootstrap', 200)
-    smoke.expect('authenticated snapshot', api + 'snapshot', 200,
-                 headers={'Origin': origin})
+    if unlocked.get('ok') is not True:
+        raise RuntimeError('class unlock did not succeed')
+    boot = smoke.json_ok('unlocked bootstrap', api + 'bootstrap')
+    if boot.get('unlocked') is not True:
+        raise RuntimeError('class bootstrap is still locked')
+    snapshot = smoke.json_ok('authenticated snapshot', api + 'snapshot',
+                             headers={'Origin': origin})
+    if not isinstance(snapshot.get('members'), list):
+        raise RuntimeError('class snapshot has no member list')
     smoke.expect('credentialed cross-origin rejection', api + 'snapshot', 403,
                  headers={'Origin': 'https://other.example.invalid'})
     smoke.expect('originless cross-site subresource rejection', api + 'snapshot', 403,
