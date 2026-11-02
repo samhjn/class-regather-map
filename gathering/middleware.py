@@ -1,11 +1,9 @@
 """Private responses and browser-side same-origin protection behind FC ingress."""
 
-from secrets import compare_digest
-
 from django.conf import settings
 from django.http import JsonResponse
 
-from .client_ip import normalized_ip
+from .client_ip import normalized_ip, valid_esa_token
 
 
 def _untrusted_esa_origin(request):
@@ -13,8 +11,7 @@ def _untrusted_esa_origin(request):
         return False
     # ESA must overwrite both values on ALL origin-bound requests, not merely
     # add them. A forged browser header must never be accepted as proof.
-    if not compare_digest(request.META.get('HTTP_X_REGATHER_ORIGIN_TOKEN', ''),
-                          settings.ESA_ORIGIN_SECRET):
+    if not valid_esa_token(request):
         return True
     try:
         normalized_ip(request.META.get('HTTP_X_REGATHER_CLIENT_IP', ''))
