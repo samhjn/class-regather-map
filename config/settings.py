@@ -79,6 +79,9 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
 DEFAULT_CLASS_SLUG = os.getenv('DEFAULT_CLASS_SLUG', 'our-class')
 AMAP_JS_KEY = os.getenv('AMAP_JS_KEY', '')
 AMAP_SERVICE_HOST = os.getenv('AMAP_SERVICE_HOST', '/_AMapService')
+# FC can serve the same-origin security proxy without a separate nginx server.
+AMAP_PROXY_ENABLED = os.getenv('AMAP_PROXY_ENABLED', '0') == '1'
+AMAP_PROXY_SECURITY_CODE = os.getenv('AMAP_PROXY_SECURITY_CODE', '')
 # Development only. Production uses a server-side reverse proxy.
 AMAP_SECURITY_JS_CODE = os.getenv('AMAP_SECURITY_JS_CODE', '') if DEBUG else ''
 CSRF_FAILURE_VIEW = 'gathering.views.csrf_failure'

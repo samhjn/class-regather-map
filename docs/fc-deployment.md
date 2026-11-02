@@ -64,7 +64,26 @@ python scripts/fc_manage.py bootstrap --account <阿里云账号ID> --region cn-
 
 命令交互读取管理员用户名、管理员密码、班级查看码和班级名称。密码只传给临时维护函数，完成后该函数被删除；已有班级或管理员不会被覆盖。首次初始化前，默认班级的直接地址返回 404 属于预期；健康接口与管理员登录页仍可用于部署验证。默认 FC 地址还受前述下载与重定向限制。
 
-高德 Key 与生产安全代理需另外配置。未提供真实地图凭据时，只能验证无地图配置时的界面，不能声称真实底图已验证。应用默认不访问互联网；若后续把高德安全代理实现于 FC 内，需要单独配置受限的上游代理和出网能力。
+## 自定义域名与高德地图
+
+在 FC 中创建同地域自定义域名，将 `/*` 路由到应用函数的 `LATEST`，允许 GET、HEAD、POST、PATCH、DELETE。为域名添加 CNAME，目标为 `<账号ID>.<地域>.fc.aliyuncs.com`；中国内地地域需满足 FC 的备案要求。上传包含域名的有效证书与私钥，开启 HTTPS，最低 TLS 1.2。证书私钥只交给 FC，不放入代码仓库或报告。
+
+在函数环境变量 `ALLOWED_HOSTS` 中追加准确域名，在 `CSRF_TRUSTED_ORIGINS` 中追加 `https://域名`。保留 `SECURE_SSL_REDIRECT=1` 和 Secure Cookie，通过实际浏览器检查首页跳转和表单。
+
+FC 无需 nginx 即可使用内置高德安全代理。在控制台设置以下环境变量，并将函数 `internetAccess` 设为 `true`：
+
+```text
+AMAP_JS_KEY=<高德 Web 端 JS API Key>
+AMAP_PROXY_ENABLED=1
+AMAP_PROXY_SECURITY_CODE=<与该 Key 配套的 securityJsCode>
+AMAP_SERVICE_HOST=/_AMapService
+```
+
+代理只允许已有班级访问权限的浏览器会话，重新检查班级锁定状态。上游限定为高德官方 `webapi.amap.com`、`fmap01.amap.com` 和 `restapi.amap.com`，使用 HTTPS，不跟随重定向，不转发浏览器 Cookie 或 Authorization；客户端不能覆盖服务端安全密钥。请求有长度、超时和响应体上限。JS Key 会用于浏览器 SDK，安全密钥仅留在 FC 环境变量中。高德控制台的域名白名单也需包含网页域名。参见[高德安全代理说明](https://developer.amap.com/api/javascript-api/guide/abc/prepare)。
+
+若继续使用独立 nginx 代理，保持 `AMAP_PROXY_ENABLED=0`，使用 `docs/nginx.conf.example`。生产环境不把安全密钥放进 `AMAP_SECURITY_JS_CODE` 或前端代码。
+
+证书需要在到期前续签并更新 FC；DNS-01 验证记录应只清理本次创建的记录，保留其他服务的 DNS 配置。部署脚本不自动续签证书。验收应覆盖真实底图、行政区下钻、地理编码、应用认证与 CSRF；未提供有效地图凭据时不能声称地图已验证。
 
 ## 运行边界
 
