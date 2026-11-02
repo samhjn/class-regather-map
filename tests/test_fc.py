@@ -34,6 +34,15 @@ class FunctionComputeTests(TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('FC requires MYSQL_HOST', result.stderr)
 
+    def test_esa_origin_secret_must_be_long_enough(self):
+        env = {**os.environ, 'ESA_ORIGIN_SECRET': 'short',
+               'SECRET_KEY': 'configuration-test-only', 'DEBUG': '0'}
+        result = subprocess.run([sys.executable, '-c', 'import config.settings'],
+                                cwd=Path(__file__).resolve().parents[1],
+                                env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ESA_ORIGIN_SECRET must be at least 32 characters', result.stderr)
+
     def test_client_ip_proxy_trust_has_safe_defaults_and_validated_overrides(self):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith('MYSQL_') and key not in ('REGATHER_FC', 'TRUSTED_PROXY_HOPS')}
