@@ -46,6 +46,26 @@ class SameOriginTests(TestCase):
                                          HTTP_SEC_FETCH_SITE='same-site',
                                          HTTP_SEC_FETCH_MODE='cors').status_code, 403)
 
+    def test_esa_origin_token_blocks_direct_fc_bypass(self):
+        secret = 'unit-test-edge-token-0123456789-abcdefgh'
+        valid = {'HTTP_X_REGATHER_ORIGIN_TOKEN': secret,
+                 'HTTP_X_REGATHER_CLIENT_IP': '203.0.113.41'}
+        with self.settings(ESA_ORIGIN_SECRET=secret, TRUSTED_PROXY_HOPS=0):
+            self.assertEqual(self.client.get(self.url).status_code, 403)
+            self.assertEqual(self.client.get('/healthz/').status_code, 403)
+            self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_CLIENT_IP='203.0.113.41').status_code, 403)
+            self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_ORIGIN_TOKEN='forged',
+                                              HTTP_X_REGATHER_CLIENT_IP='203.0.113.41').status_code, 403)
+            self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_ORIGIN_TOKEN=secret).status_code, 403)
+            self.assertEqual(self.client.get(self.url, HTTP_X_REGATHER_ORIGIN_TOKEN=secret,
+                                              HTTP_X_REGATHER_CLIENT_IP='bad-ip').status_code, 403)
+            self.assertEqual(self.client.get(self.url, **valid).status_code, 200)
+            self.assertEqual(self.client.get('/healthz/', **valid).status_code, 200)
+            # Edge authentication does not weaken existing same-origin checks.
+            cross_origin = self.client.get(self.url, HTTP_ORIGIN='http://other.testserver', **valid)
+            self.assertEqual(cross_origin.status_code, 403)
+            self.assertNotIn(b'members', cross_origin.content)
+
     def test_external_links_still_open_the_class_page(self):
         response = self.client.get('/c/map/', HTTP_SEC_FETCH_SITE='cross-site',
                                    HTTP_SEC_FETCH_MODE='navigate')
