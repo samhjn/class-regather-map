@@ -70,6 +70,22 @@ class ProxyThrottleTests(TestCase):
         # Changing the untrusted prefix cannot reset the attacker's bucket.
         self.assertEqual(self.unlock(self.first, HTTP_X_FORWARDED_FOR='198.51.100.99, 203.0.113.10').status_code, 429)
 
+    @override_settings(ESA_ORIGIN_SECRET='unit-test-edge-token-0123456789-abcdefgh',
+                       TRUSTED_PROXY_HOPS=0)
+    def test_esa_clients_have_separate_end_to_end_auth_buckets(self):
+        token = 'unit-test-edge-token-0123456789-abcdefgh'
+        first = Client(REMOTE_ADDR='10.0.0.10',
+                       HTTP_X_REGATHER_ORIGIN_TOKEN=token,
+                       HTTP_X_REGATHER_CLIENT_IP='203.0.113.31')
+        second = Client(REMOTE_ADDR='10.0.0.10',
+                        HTTP_X_REGATHER_ORIGIN_TOKEN=token,
+                        HTTP_X_REGATHER_CLIENT_IP='203.0.113.32')
+        for _ in range(60):
+            self.assertEqual(self.unlock(first, 'wrong').status_code, 403)
+        self.assertEqual(self.unlock(first).status_code, 429)
+        self.assertEqual(self.unlock(second).status_code, 200)
+        self.assertEqual(self.unlock(first, HTTP_X_FORWARDED_FOR='198.51.100.99').status_code, 429)
+
     def test_account_limit_still_applies_across_different_client_ips(self):
         user = get_user_model().objects.create_user('member', password='member-password')
         Member.objects.create(classroom=self.room, user=user, student_code='001', name='同学')
