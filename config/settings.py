@@ -83,6 +83,11 @@ except ValueError as error:
     raise ImproperlyConfigured('TRUSTED_PROXY_HOPS must be an integer from 0 to 8.') from error
 if not 0 <= TRUSTED_PROXY_HOPS <= 8:
     raise ImproperlyConfigured('TRUSTED_PROXY_HOPS must be an integer from 0 to 8.')
+# Optional ESA-to-FC origin authentication. An ESA origin rule MUST overwrite
+# both X-Regather-Origin-Token and X-Regather-Client-IP.
+ESA_ORIGIN_SECRET = os.getenv('ESA_ORIGIN_SECRET', '')
+if ESA_ORIGIN_SECRET and len(ESA_ORIGIN_SECRET) < 32:
+    raise ImproperlyConfigured('ESA_ORIGIN_SECRET must be at least 32 characters.')
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
 DEFAULT_CLASS_SLUG = os.getenv('DEFAULT_CLASS_SLUG', 'our-class')
 AMAP_JS_KEY = os.getenv('AMAP_JS_KEY', '')
