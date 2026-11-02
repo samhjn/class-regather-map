@@ -52,7 +52,7 @@ python manage.py seed_demo
 
 1. 在[高德开放平台](https://console.amap.com/)创建「Web端（JS API）」Key，设置部署域名白名单。
 2. 设置 `AMAP_JS_KEY`。本地调试还可设置 `AMAP_SECURITY_JS_CODE`（仅 DEBUG 模式使用）。
-3. 生产配置同源安全代理 `AMAP_SERVICE_HOST=/_AMapService`，将 securityJsCode 仅放在代理服务器配置中。完整示例见 [docs/nginx.conf.example](docs/nginx.conf.example)。
+3. 生产配置同源安全代理 `AMAP_SERVICE_HOST=/_AMapService`，将 securityJsCode 仅放在服务端。nginx 方案见 [docs/nginx.conf.example](docs/nginx.conf.example)，FC 内置代理见 [docs/fc-deployment.md](docs/fc-deployment.md)。
 4. 配置后检查世界、中国、边境省份、港澳台、南海及手机窄屏下的地图来源和审图号显示。
 
 地图使用高德官方标准底图和 `DistrictLayer.World / Country / Province`。选用文档明确提供 `getDistrictByContainerPos` 的 JS API 1.4.15；将其集中封装在 `map.js`，便于将来替换。没有引入外部 GeoJSON、Natural Earth、OSM 或自行重绘中国边界。区域着色仅表达人数，边界几何与线型交给 SDK。
@@ -142,7 +142,7 @@ npm run check
 npm test
 ```
 
-CI 分别测试 SQLite 和 MySQL 8.4。核心覆盖：班级隔离、所有写接口权限、CSRF、密码轮换、认领过期和重放、区间边界与重叠、乐观锁、导入预览与回滚、行政区归一化、高德代理的权限和上游限制、可信代理下的客户端限流、FC 维护函数异常清理。部署工具测试使用模拟客户端，不访问云资源；部署 SDK 仍不进入应用代码包。MySQL 作业额外执行并发区间写入测试。
+CI 分别测试 SQLite 和 MySQL 8.4，并对 Linux FC 部署 ZIP 进行构建和必要文件检查。核心覆盖：班级隔离、所有写接口权限、CSRF、密码轮换、认领过期和重放、区间边界与重叠、乐观锁、导入预览与回滚、行政区归一化、高德代理权限/上游白名单/限流、跨源会话读取防护、可信代理下的客户端限流、FC 维护函数异常清理。部署工具测试使用模拟客户端，不访问云资源；部署 SDK 仍不进入应用代码包。MySQL 作业额外执行并发区间写入测试。
 
 前端测试使用 Node.js 22.22.2+（22.x）或 24.15.0+（24.x）。`npm test` 包含无需高德 Key 的 DOM 回归测试，覆盖地点选择、导入后的筛选口径、五档排序、统一地理视野、未填位置名单与页面返回；地图渲染和手势仍由下面的 Playwright 测试验证。
 
@@ -166,7 +166,7 @@ npm run e2e -- recency-unified.spec.mjs
 - 已预留多班级数据隔离，但没有自助开班、租户计费、跨班账号合并或租户域名管理。
 - 单点位置由用户主动选择，不后台跟踪。城市级分享足以使用主要功能。共享班级密码意味着所有持有密码的人都能浏览班级资料。
 - 省市列表由高德行政区服务提供，失败时可以手工填写城市名及市级行政区代码。服务配额、海外覆盖与特定地区数据可用性取决于供应商账号。
-- 应用认证限流持久化在数据库，默认使用 REMOTE_ADDR，不盲目信任来路不明的 X-Forwarded-For；反代部署中可能共享一个 IP 限额。大型部署应在可信入口增加按真实客户端 IP 的限流。
+- 应用认证及内置高德代理限流持久化在数据库；默认直连使用 REMOTE_ADDR，FC 仅在配置可信代理跳数后使用转发链右侧地址。不盲目信任 X-Forwarded-For；新增 CDN/反代应验证真实请求链，大型部署应在可信入口限流。FC 默认 CORS 回显需要应用层跨源防护，详见部署验收说明。
 
 ## 许可证
 
