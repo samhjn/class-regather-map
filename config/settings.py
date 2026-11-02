@@ -90,6 +90,14 @@ AMAP_SERVICE_HOST = os.getenv('AMAP_SERVICE_HOST', '/_AMapService')
 # FC can serve the same-origin security proxy without a separate nginx server.
 AMAP_PROXY_ENABLED = os.getenv('AMAP_PROXY_ENABLED', '0') == '1'
 AMAP_PROXY_SECURITY_CODE = os.getenv('AMAP_PROXY_SECURITY_CODE', '')
+# RDS-backed 15-minute request budgets; keep map tile traffic separate from API calls.
+try:
+    AMAP_PROXY_TILE_LIMIT = int(os.getenv('AMAP_PROXY_TILE_LIMIT', '3000'))
+    AMAP_PROXY_API_LIMIT = int(os.getenv('AMAP_PROXY_API_LIMIT', '300'))
+except ValueError as error:
+    raise ImproperlyConfigured('AMAP proxy limits must be positive integers.') from error
+if AMAP_PROXY_TILE_LIMIT < 1 or AMAP_PROXY_API_LIMIT < 1:
+    raise ImproperlyConfigured('AMAP proxy limits must be positive integers.')
 # Development only. Production uses a server-side reverse proxy.
 AMAP_SECURITY_JS_CODE = os.getenv('AMAP_SECURITY_JS_CODE', '') if DEBUG else ''
 CSRF_FAILURE_VIEW = 'gathering.views.csrf_failure'
