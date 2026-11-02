@@ -72,6 +72,22 @@ python scripts/fc_manage.py bootstrap --account <阿里云账号ID> --region cn-
 
 在函数环境变量 `ALLOWED_HOSTS` 中追加准确域名，在 `CSRF_TRUSTED_ORIGINS` 中追加 `https://域名`。保留 `SECURE_SSL_REDIRECT=1` 和 Secure Cookie，通过实际浏览器检查首页跳转和表单。
 
+### 可选：通过 ESA 回源时的可信入口与真实客户端 IP
+
+**不使用 ESA、只用 FC 自定义域名时，不设置 `ESA_ORIGIN_SECRET`，仍按下文实测结果选择可信 XFF 跳数。** 如果使用 ESA → FC → RDS，建议启用应用层回源认证，防止攻击者绕过 ESA、通过公开的 FC HTTP 触发器直接调用应用接口。
+
+1. 在安全位置生成至少 32 字符的随机令牌，例如 `python -c 'import secrets; print(secrets.token_urlsafe(48))'`。令牌只应配置在 ESA 回源规则与 FC 环境变量，不要放入代码、浏览器、URL、截图或流水线日志。
+2. 在 ESA 的 **规则 → 转换规则 → 修改请求头 → ESA 到源站** 中，为此站点所有回源请求设置两条**添加（覆盖同名客户端值）**规则：
+   - `X-Regather-Origin-Token`：**静态**值，等于上一步生成的令牌。
+   - `X-Regather-Client-IP`：**动态**表达式 `ip.src`，让 ESA 写入请求者的真实 IP。不要从原请求照搬这两个头，也不要使用“变更（只在原头存在时生效）”。
+3. 在 FC 的应用函数环境变量设置 `ESA_ORIGIN_SECRET=<相同令牌>`，并建议将 `TRUSTED_PROXY_HOPS=0`；ESA 模式下应用只使用受令牌保护的 `X-Regather-Client-IP`，不再需要推断 ESA/FC 的 XFF 代理层数。部署该配置前要确保 ESA 回源规则已生效，否则所有请求（包括静态资源、健康检查）都会被应用返回 403。
+4. 绑定真实 HTTPS 域名，确认 Host、`X-Forwarded-Proto` 和 Django 的 `ALLOWED_HOSTS` 配置正确。必须在 ESA 中禁用 `/c/`、`/admin/`、`/_AMapService/` 等私有路径的缓存，并确认遵循 `Cache-Control: private, no-store`；静态文件可独立缓存。
+5. 验证经过 ESA 的正常访问为 200，而直接访问 FC 默认验证 URL（未携带内部令牌）为 403。模拟浏览器伪造 `X-Regather-Origin-Token` 或 `X-Regather-Client-IP` 时，**由 ESA 回源规则覆盖请求头**，不得让客户端控制它们。令牌泄漏后应同时在 ESA 和 FC 中轮换。
+
+这是一道**应用层内容访问门禁**：FC 的公开 HTTP 触发器依然可能被直接调用并产生少量函数调用费用，应用返回 403 不等于云网关/网络层已经拒绝流量。如需防止源站调用费用或 L7 DDoS，仍须结合产品实际可用的源站访问控制与限流能力。不要把 ESA 回源 IP 白名单假设为 FC 匿名 HTTP 触发器已经提供的能力，也不要在没有验证流量来源的情况下仅信任 `X-Forwarded-For`。
+
+参考：[ESA 修改出站请求头](https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/modify-outgoing-request-header)、[ESA 源站防护](https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/origin-protection)、[FC HTTP 触发器](https://help.aliyun.com/zh/functioncompute/http-triggers-overview)。
+
 ### 跨域访问边界（必须验收）
 
 FC 旧版默认 CORS 行为会回显浏览器请求中的 `Origin`，并可能附加 `Access-Control-Allow-Credentials: true`。同一注册域下不同子域（例如 `other.example.com` 与 `class.example.com`）在 `SameSite=Lax` 下仍属 same-site，因此不能靠 Cookie 的 SameSite 设置保护跨源读取。
@@ -103,17 +119,33 @@ AMAP_PROXY_TILE_LIMIT=3000
 AMAP_PROXY_API_LIMIT=300
 ```
 
-代理只允许已有班级访问权限的浏览器会话，重新检查班级锁定状态。上游固定为高德官方 `webapi.amap.com`、`fmap01.amap.com` 和 `restapi.amap.com`，且路径限定为 `v4/map/styles`、`v3/vectormap`、`v3/config/district`、`v3/geocode/geo` 和 `v3/geocode/regeo`（地图资源可有子路径）；未来变更 SDK 时需先确认新请求并按需扩充白名单。使用 HTTPS，不跟随重定向，不转发浏览器 Cookie 或 Authorization；客户端不能覆盖服务端安全密钥。请求有长度、超时和响应体上限，还使用现有 RDS 限流桶分别限制瓦片与 REST API；达到限制返回 429。由于每次请求会产生一次数据库计数写入，访问量大时应转向入口限流或独立缓存服务。JS Key 会用于浏览器 SDK，安全密钥仅留在 FC 环境变量中。高德控制台的域名白名单也需包含网页域名。参见[高德安全代理说明](https://developer.amap.com/api/javascript-api/guide/abc/prepare)。
+代理只允许已有班级访问权限的浏览器会话，重新检查班级锁定状态。上游固定为高德官方 `webapi.amap.com`、`fmap01.amap.com` 和 `restapi.amap.com`，且路径限定为 `v4/map/styles`、`v3/vectormap`、`v3/config/district`、`v3/geocode/geo`、`v3/geocode/regeo` 和 `v3/assistant/coordinate/convert`（地图资源可有子路径；坐标转换用于设备 GPS 转 GCJ-02）；未来变更 SDK 时需先确认新请求并按需扩充白名单。使用 HTTPS，不跟随重定向，不转发浏览器 Cookie 或 Authorization；客户端不能覆盖服务端安全密钥。请求有长度、超时和响应体上限，还使用现有 RDS 限流桶分别限制瓦片与 REST API；达到限制返回 429。由于每次请求会产生一次数据库计数写入，访问量大时应转向入口限流或独立缓存服务。JS Key 会用于浏览器 SDK，安全密钥仅留在 FC 环境变量中。高德控制台的域名白名单也需包含网页域名。参见[高德安全代理说明](https://developer.amap.com/api/javascript-api/guide/abc/prepare)。
 
 若继续使用独立 nginx 代理，保持 `AMAP_PROXY_ENABLED=0`，使用 `docs/nginx.conf.example`。生产环境不把安全密钥放进 `AMAP_SECURITY_JS_CODE` 或前端代码。
 
 证书需要在到期前续签并更新 FC；DNS-01 验证记录应只清理本次创建的记录，保留其他服务的 DNS 配置。部署脚本不自动续签证书。验收应覆盖真实底图、行政区下钻、地理编码、应用认证与 CSRF；未提供有效地图凭据时不能声称地图已验证。
 
+### 预发布验收门槛（合并/正式上线前）
+
+在独立的、使用虚构成员与单独查看码的 staging 班级执行：
+
+```bash
+# 仅需公网 HTTPS 地址，无须提供云凭据；查看码通过无回显交互输入
+python scripts/fc_smoke.py --url https://staging.example.com --class-slug preview
+# 如果启用 ESA 回源认证，并且 FC 仍公开默认验证地址，额外检查直连被拦截
+python scripts/fc_smoke.py --url https://staging.example.com --class-slug preview \
+  --direct-fc-url https://<fc-verification-domain>
+```
+
+脚本只发起健康、解锁、读取、跨源拒绝、地图白名单及坐标转换等请求；不修改成员资料，不打印 Cookie/地图 Key/查看码/成员数据。检查通过不代表浏览器地图功能已经验收，还必须在 HTTPS 真实浏览器中确认：世界/中国/省市下钻、真实底图与审图号、浏览器地理定位 `AMap.convertFrom`、地理逆编码及无权限访问被拒绝。在 DevTools Network 中检查是否存在被 400 拦截的 `/_AMapService/` 请求，重点关注 `v3/assistant/coordinate/convert` 和后续版本新接口。
+
+在两个独立公网出口测试少量正常请求，核对两者不会共享客户端 IP 限流身份；另外人为给客户端请求加入虚假 XFF 前缀、虚假 ESA 头，确认不会改写计数归属。必要时在**隔离的** staging RDS 中查询限流记录（哈希键不可直接当作原始 IP）；不要在真实班级对登录或地图接口做大规模压测。记录前端完整地图浏览、缩放、切换视角的请求数以及 RDS 写事务和 FC 调用，评估是否需要将瓦片限流从数据库移到边缘。验收失败应继续保持 PR 为 Draft，不应仅凭 CI 成功上线。
+
 ## 运行边界
 
 - `REGATHER_FC=1` 禁止缺少 MYSQL_HOST 时退回 SQLite。FC 保留 `FC_` 前缀，因此自定义变量使用 `REGATHER_FC`、`PORT`、`GUNICORN_THREADS`。
 - 只在 FC 可信入口后设置 TRUST_PROXY=1。新增代理时，应重新验证 HTTPS 判断、Host、CSRF 来源与 Cookie。
-- 客户端限流独立使用 `TRUSTED_PROXY_HOPS`：`REGATHER_FC=1` 时默认 1，其他环境默认 0（只使用连接对端地址），可显式设为 0–8。FC 模板声明为 1，从 `X-Forwarded-For` 右侧取网关写入的地址；客户端伪造的左侧前缀不参与计数。解锁、个人登录/认领和后台登录共用此解析，账号级限流继续生效。
+- **未启用 ESA 回源认证时**，客户端限流使用 `TRUSTED_PROXY_HOPS`：`REGATHER_FC=1` 时默认 1，其他环境默认 0（只使用连接对端地址），可显式设为 0–8。FC 模板声明为 1，从 `X-Forwarded-For` 右侧取网关写入的地址；客户端伪造的左侧前缀不参与计数。**启用 `ESA_ORIGIN_SECRET` 时**，必须同时具有合法回源令牌和 ESA 改写的客户端 IP，请求才会到达应用；限流不使用 XFF。解锁、登录/认领和后台登录共用此解析，账号级限流继续生效。
 - 启用转发地址信任的前提是应用端口只能由这些代理访问，且入口覆盖或追加真实对端 IP。新增 CDN/WAF/nginx 后应先验证实际转发链，按固定可信层数配置，不能直接取最左侧值或盲目增加层数。缺失、过短或可信部分无效的头回退到连接对端。上线验收应确认不同来源 IP 独立计数，伪造 XFF 前缀无法绕过限流；参见 [XFF 的安全解析规则](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-For)。
 - **真实网关验收不能由单元测试代替**：在隔离的预览班级，从不同公网 IP 进行少量合法的地图请求，再使用伪造前缀的 `X-Forwarded-For` 重试，结合隔离环境的限流桶验证计数归属；如果 FC 网关并不覆盖/追加真实来源，先设 `TRUSTED_PROXY_HOPS=0`，并在可信入口建立限流，不要照搬 1 跳的模板。不要在真实班级上使用大量失败登录来做此测试。
 - Gunicorn 使用 /tmp 保存工作文件，访问日志不记录查询串或 Cookie；不向应用函数注入长期 AK/SK。
