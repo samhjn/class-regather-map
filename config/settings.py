@@ -27,6 +27,8 @@ TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIR
               'OPTIONS': {'context_processors': ['django.template.context_processors.request',
                   'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages']}}]
 WSGI_APPLICATION = 'config.wsgi.application'
+if os.getenv('REGATHER_FC') == '1' and not os.getenv('MYSQL_HOST'):
+    raise ImproperlyConfigured('FC requires MYSQL_HOST; its local filesystem is not persistent storage.')
 if os.getenv('MYSQL_HOST'):
     import pymysql
     pymysql.install_as_MySQLdb()
@@ -34,8 +36,11 @@ if os.getenv('MYSQL_HOST'):
         'ENGINE': 'django.db.backends.mysql', 'HOST': os.environ['MYSQL_HOST'],
         'PORT': os.getenv('MYSQL_PORT', '3306'), 'NAME': os.getenv('MYSQL_DATABASE', 'regather'),
         'USER': os.getenv('MYSQL_USER', 'regather'), 'PASSWORD': os.environ['MYSQL_PASSWORD'],
-        'CONN_MAX_AGE': 60, 'CONN_HEALTH_CHECKS': True,
+        'CONN_MAX_AGE': int(os.getenv('MYSQL_CONN_MAX_AGE', '60')), 'CONN_HEALTH_CHECKS': True,
         'OPTIONS': {'charset': 'utf8mb4', 'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+                    'connect_timeout': int(os.getenv('MYSQL_CONNECT_TIMEOUT', '10')),
+                    'read_timeout': int(os.getenv('MYSQL_READ_TIMEOUT', '30')),
+                    'write_timeout': int(os.getenv('MYSQL_WRITE_TIMEOUT', '30')),
                     **({'ssl': {'ca': os.environ['MYSQL_SSL_CA'], 'check_hostname': True}} if os.getenv('MYSQL_SSL_CA') else {})},
     }}
 else:

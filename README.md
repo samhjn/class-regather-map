@@ -63,6 +63,8 @@ python manage.py seed_demo
 
 ## MySQL / Docker 部署
 
+阿里云函数计算 FC 3.0 部署见 [docs/fc-deployment.md](docs/fc-deployment.md)：提供 Linux/Python 3.12 ZIP 打包、函数配置模板、独立迁移与更新工具。FC 使用 RDS 内网，不使用本地 SQLite。
+
 应用依赖标准 MySQL 事务、唯一约束及行锁。对于一个班级，MySQL 更适合身份认领、导入与时间区间更新；本版不实现 OTS 适配。需要迁往 OTS 时应重新实现条件写、并发控制和历史查询索引，不可仅替换数据库连接串。
 
 ```bash
