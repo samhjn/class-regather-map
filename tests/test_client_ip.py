@@ -36,6 +36,20 @@ class ClientIPTests(SimpleTestCase):
         self.assertEqual(self.address(' 2001:0db8:0000:0000:0000:0000:0000:0001 '), '2001:db8::1')
         self.assertEqual(self.address('::ffff:203.0.113.10'), '203.0.113.10')
 
+    @override_settings(TRUSTED_PROXY_HOPS=1, ESA_ORIGIN_SECRET='unit-test-edge-token-0123456789-abcdefgh')
+    def test_authenticated_esa_identity_overrides_all_xff_data(self):
+        request = RequestFactory().get('/', REMOTE_ADDR='10.0.0.10',
+            HTTP_X_FORWARDED_FOR='198.51.100.23, 10.0.0.20',
+            HTTP_X_REGATHER_CLIENT_IP='203.0.113.41',
+            HTTP_X_REGATHER_ORIGIN_TOKEN='unit-test-edge-token-0123456789-abcdefgh')
+        self.assertEqual(client_ip(request), '203.0.113.41')
+        request.META['HTTP_X_REGATHER_ORIGIN_TOKEN'] = 'forged'
+        # The attacker-supplied true-client header is untrusted without the token.
+        self.assertEqual(client_ip(request), '10.0.0.10')
+        request.META['HTTP_X_REGATHER_ORIGIN_TOKEN'] = 'unit-test-edge-token-0123456789-abcdefgh'
+        request.META['HTTP_X_REGATHER_CLIENT_IP'] = 'not-an-ip'
+        self.assertEqual(client_ip(request), '10.0.0.10')
+
 
 @override_settings(TRUSTED_PROXY_HOPS=1, SECURE_SSL_REDIRECT=False,
                    PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
