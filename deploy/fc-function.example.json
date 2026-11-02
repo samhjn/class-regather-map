@@ -25,6 +25,7 @@
     "REGATHER_FC": "1",
     "ALLOWED_HOSTS": "localhost,127.0.0.1",
     "TRUST_PROXY": "1",
+    "TRUSTED_PROXY_HOPS": "1",
     "SECURE_SSL_REDIRECT": "1",
     "PYTHONPATH": "/code/python:/code",
     "PYTHONDONTWRITEBYTECODE": "1",

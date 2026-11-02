@@ -75,6 +75,14 @@ SECURE_REFERRER_POLICY = 'same-origin'
 # Enable only behind a trusted proxy that overwrites X-Forwarded-Proto.
 if os.getenv('TRUST_PROXY', '0') == '1':
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+# FC's HTTP gateway is the sole ingress to the custom runtime. Other deployments
+# must opt in only after isolating the app behind a verified proxy chain.
+try:
+    TRUSTED_PROXY_HOPS = int(os.getenv('TRUSTED_PROXY_HOPS', '1' if os.getenv('REGATHER_FC') == '1' else '0'))
+except ValueError as error:
+    raise ImproperlyConfigured('TRUSTED_PROXY_HOPS must be an integer from 0 to 8.') from error
+if not 0 <= TRUSTED_PROXY_HOPS <= 8:
+    raise ImproperlyConfigured('TRUSTED_PROXY_HOPS must be an integer from 0 to 8.')
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
 DEFAULT_CLASS_SLUG = os.getenv('DEFAULT_CLASS_SLUG', 'our-class')
 AMAP_JS_KEY = os.getenv('AMAP_JS_KEY', '')

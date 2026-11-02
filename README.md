@@ -132,6 +132,7 @@ docker compose exec app python manage.py clearratelimits
 ## 测试
 
 ```bash
+python -m pip install -r requirements.txt -r requirements-fc-tools.txt
 DEBUG=1 python manage.py collectstatic --noinput
 DEBUG=1 python manage.py check
 DEBUG=1 python manage.py makemigrations --check --dry-run
@@ -141,7 +142,7 @@ npm run check
 npm test
 ```
 
-CI 分别测试 SQLite 和 MySQL 8.4。核心覆盖：班级隔离、所有写接口权限、CSRF、密码轮换、认领过期和重放、区间边界与重叠、乐观锁、导入预览与回滚、行政区归一化、高德代理的权限和上游限制。MySQL 作业额外执行并发区间写入测试。
+CI 分别测试 SQLite 和 MySQL 8.4。核心覆盖：班级隔离、所有写接口权限、CSRF、密码轮换、认领过期和重放、区间边界与重叠、乐观锁、导入预览与回滚、行政区归一化、高德代理的权限和上游限制、可信代理下的客户端限流、FC 维护函数异常清理。部署工具测试使用模拟客户端，不访问云资源；部署 SDK 仍不进入应用代码包。MySQL 作业额外执行并发区间写入测试。
 
 前端测试使用 Node.js 22.22.2+（22.x）或 24.15.0+（24.x）。`npm test` 包含无需高德 Key 的 DOM 回归测试，覆盖地点选择、导入后的筛选口径、五档排序、统一地理视野、未填位置名单与页面返回；地图渲染和手势仍由下面的 Playwright 测试验证。
 

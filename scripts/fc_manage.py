@@ -33,16 +33,37 @@ def wait_ready(client, name):
     raise TimeoutError('FC is still updating; inspect the function console before retrying.')
 
 
+def cleanup_maintenance(client, name, description):
+    try:
+        info = client.get_function(name, fc.GetFunctionRequest()).body
+    except Exception as error:
+        if getattr(error, 'code', None) == 'FunctionNotFound':
+            return
+        raise
+    # A name conflict or a concurrent replacement must never delete another
+    # resource. The full per-operation UUID is also recorded in the description.
+    if info.description != description:
+        raise RuntimeError('Temporary function ownership could not be verified.')
+    try:
+        client.delete_function(name)
+    except Exception as error:
+        if getattr(error, 'code', None) != 'FunctionNotFound':
+            raise
+
+
 def maintenance(client, source, code, action, extra_env=None):
-    name = source.function_name[:40] + '-ops-' + uuid.uuid4().hex[:8]
+    operation_id = uuid.uuid4().hex
+    name = source.function_name[:26] + '-ops-' + operation_id
+    description = 'Temporary IAM-only class-regather-map maintenance ' + operation_id
     env = dict(source.environment_variables)
     env.update(extra_env or {})
     body = fc.CreateFunctionInput(
-        function_name=name, description='Temporary IAM-only class-regather-map maintenance',
+        function_name=name, description=description,
         runtime='python3.12', handler='fc_migrate.handler', code=fc.InputCodeLocation(zip_file=code),
         environment_variables=env, cpu=0.5, memory_size=512, disk_size=512, timeout=180,
         instance_concurrency=1, internet_access=False, vpc_config=source.vpc_config)
     created = False
+    failed = True
     try:
         client.create_function(fc.CreateFunctionRequest(body=body))
         created = True
@@ -54,14 +75,20 @@ def maintenance(client, source, code, action, extra_env=None):
         result = json.loads(response.body.read())
         if result.get('status') != 'ok' or not result.get('write_read_rollback'):
             raise RuntimeError('Maintenance validation failed.')
+        failed = False
         return result
     finally:
-        if created:
-            try:
-                client.delete_function(name)
-            except Exception:
-                # Never hide a cleanup failure: the caller must remove this named resource.
-                print(f'Cleanup needed: delete temporary function {name}.')
+        if not created:
+            # A timeout does not establish whether FC accepted the create request.
+            # Keep the name visible even if a lookup races a late server-side create.
+            print(f'Creation outcome unconfirmed: verify temporary function {name} is removed.')
+        try:
+            cleanup_maintenance(client, name, description)
+        except Exception:
+            print(f'Cleanup unconfirmed: inspect temporary function {name} and remove it if owned by this operation.')
+            # Preserve the original failure; a cleanup failure after successful
+            # maintenance must still make the CLI fail rather than report success.
+            if not failed:
                 raise
 
 

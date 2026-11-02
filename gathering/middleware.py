@@ -5,9 +5,10 @@ class PrivateResponseMiddleware:
     def __call__(self, request):
         if request.path == '/admin/login/' and request.method == 'POST':
             from django.http import JsonResponse
+            from .client_ip import client_ip
             from .services import Problem, throttle
             try:
-                throttle('system-admin-login', request.META.get('REMOTE_ADDR', ''), 20)
+                throttle('system-admin-login', client_ip(request), 20)
             except Problem as error:
                 response = JsonResponse({'error': error.message}, status=error.status)
                 response['Cache-Control'] = 'private, no-store'

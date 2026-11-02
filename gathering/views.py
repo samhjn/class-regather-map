@@ -18,6 +18,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET
 
 from .geography import PROVINCES, countries, country_name
+from .client_ip import client_ip
 from .models import Classroom, Location, Member
 from .services import (Problem, audit, confirm_location, import_rows, issue_claim, lock_member, parse_date,
                        parse_import, save_location, secret_text, string, throttle, validate_member_password)
@@ -107,8 +108,7 @@ def check_edit(request, classroom, member_id):
 
 
 def auth_throttle(request, classroom, kind, account=''):
-    # REMOTE_ADDR is deliberate: never trust arbitrary X-Forwarded-For.
-    throttle(f'{kind}:ip:{classroom.pk}', request.META.get('REMOTE_ADDR', ''), 60)
+    throttle(f'{kind}:ip:{classroom.pk}', client_ip(request), 60)
     if account:
         throttle(f'{kind}:account:{classroom.pk}', account, 15)
 

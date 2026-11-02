@@ -32,6 +32,8 @@ python scripts/fc_manage.py create --account <阿里云账号ID> --region cn-han
 
 创建顺序：Web 函数 → 临时 IAM 维护函数 → 迁移及数据库写入/回滚检查 → 删除维护函数 → HTTP 入口 → 精确设置 ALLOWED_HOSTS 和 CSRF_TRUSTED_ORIGINS。重复创建同名函数会失败，不覆盖旧资源。若中途失败，检查控制台中的已创建资源，再用 migrate/update 继续；脚本不会删除应用数据库。
 
+临时维护函数使用完整 UUID 命名并记录归属标记。即使创建请求超时，脚本也会查询该名称并仅删除标记匹配的资源；创建结果不确定或清理失败时会输出函数名。若云端在查询后才完成创建，需按提示再次确认资源已移除。初始化时其中可能包含管理员密码，因此不要忽略清理提示。
+
 `--public-http` 明确开放默认公网地址，允许 GET、HEAD、POST、PATCH、DELETE；应用登录、班级权限和 CSRF 检查照常生效。默认配置为 0.5 vCPU / 512 MB、单实例 4 个并发请求、函数并发上限 8，无预留实例，可缩容到零。连接每次请求后关闭，避免空闲实例长期占用 RDS 连接。
 
 FC 的默认 `fcapp.run` 地址用于接口验证。实测响应附加 `Content-Disposition: attachment`，浏览器会下载页面；首页等重定向还会被平台拦截为 `ExternalRedirectForbidden`。完整网页访问需要配置自定义域名。保持应用认证与 HTTPS/Cookie 设置不变，使用 `/healthz/` 和直接 API 路径验证。参见[官方 HTTP 触发器说明](https://www.alibabacloud.com/help/en/functioncompute/configure-an-http-trigger-for-a-function-and-invoke-the-function-by-using-http-requests)。
@@ -89,6 +91,8 @@ AMAP_SERVICE_HOST=/_AMapService
 
 - `REGATHER_FC=1` 禁止缺少 MYSQL_HOST 时退回 SQLite。FC 保留 `FC_` 前缀，因此自定义变量使用 `REGATHER_FC`、`PORT`、`GUNICORN_THREADS`。
 - 只在 FC 可信入口后设置 TRUST_PROXY=1。新增代理时，应重新验证 HTTPS 判断、Host、CSRF 来源与 Cookie。
+- 客户端限流独立使用 `TRUSTED_PROXY_HOPS`：`REGATHER_FC=1` 时默认 1，其他环境默认 0（只使用连接对端地址），可显式设为 0–8。FC 模板声明为 1，从 `X-Forwarded-For` 右侧取网关写入的地址；客户端伪造的左侧前缀不参与计数。解锁、个人登录/认领和后台登录共用此解析，账号级限流继续生效。
+- 启用转发地址信任的前提是应用端口只能由这些代理访问，且入口覆盖或追加真实对端 IP。新增 CDN/WAF/nginx 后应先验证实际转发链，按固定可信层数配置，不能直接取最左侧值或盲目增加层数。缺失、过短或可信部分无效的头回退到连接对端。上线验收应确认不同来源 IP 独立计数，伪造 XFF 前缀无法绕过限流；参见 [XFF 的安全解析规则](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-For)。
 - Gunicorn 使用 /tmp 保存工作文件，访问日志不记录查询串或 Cookie；不向应用函数注入长期 AK/SK。
 - 后续需要定期运行 clearsessions / clearratelimits，并监控 RDS 连接数和备份状态；本次部署不自动添加定时任务。
 - 默认验证地址和真实高德地图验证是两个独立环节。正式域名、高德安全代理与真实班级名单不由部署脚本自动创建。

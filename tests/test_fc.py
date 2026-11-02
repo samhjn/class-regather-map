@@ -33,3 +33,23 @@ class FunctionComputeTests(TestCase):
                                 env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('FC requires MYSQL_HOST', result.stderr)
+
+    def test_client_ip_proxy_trust_has_safe_defaults_and_validated_overrides(self):
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith('MYSQL_') and key not in ('REGATHER_FC', 'TRUSTED_PROXY_HOPS')}
+        env.update(SECRET_KEY='configuration-test-only', DEBUG='0', TRUST_PROXY='1')
+        cases = [({}, '0'), ({**self.env, 'REGATHER_FC': '1'}, '1'),
+                 ({**self.env, 'REGATHER_FC': '1', 'TRUSTED_PROXY_HOPS': '0'}, '0'),
+                 ({'TRUSTED_PROXY_HOPS': '2'}, '2')]
+        for changes, expected in cases:
+            with self.subTest(expected=expected, fc=changes.get('REGATHER_FC')):
+                result = subprocess.run([sys.executable, '-c',
+                    'from config.settings import TRUSTED_PROXY_HOPS; print(TRUSTED_PROXY_HOPS)'],
+                    cwd=Path(__file__).resolve().parents[1], env={**env, **changes}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+        for invalid in ('-1', '9', 'invalid'):
+            result = subprocess.run([sys.executable, '-c', 'import config.settings'],
+                cwd=Path(__file__).resolve().parents[1], env={**env, 'TRUSTED_PROXY_HOPS': invalid}, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('TRUSTED_PROXY_HOPS must be an integer from 0 to 8.', result.stderr)
