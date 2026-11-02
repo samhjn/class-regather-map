@@ -1,5 +1,6 @@
 """Client identity for throttling behind an explicitly trusted proxy chain."""
 from ipaddress import ip_address
+from secrets import compare_digest
 
 from django.conf import settings
 
@@ -18,6 +19,16 @@ def client_ip(request):
         peer = normalized_ip(peer)
     except ValueError:
         peer = ''
+    # When ESA protects the FC origin, its authenticated and overwritten source
+    # address is authoritative; there is no need to guess the ESA/FC XFF chain.
+    if settings.ESA_ORIGIN_SECRET:
+        token = request.META.get('HTTP_X_REGATHER_ORIGIN_TOKEN', '')
+        if not compare_digest(token, settings.ESA_ORIGIN_SECRET):
+            return peer
+        try:
+            return normalized_ip(request.META['HTTP_X_REGATHER_CLIENT_IP'])
+        except (KeyError, ValueError):
+            return peer
     hops = settings.TRUSTED_PROXY_HOPS
     if not hops:
         return peer
