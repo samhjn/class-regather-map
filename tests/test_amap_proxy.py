@@ -48,7 +48,8 @@ class AMapProxyTests(TestCase):
     def test_upstream_routes_and_server_secret_cannot_be_overridden(self):
         self.unlock()
         for resource, host in [('v4/map/styles', 'webapi.amap.com'), ('v3/vectormap', 'fmap01.amap.com'),
-                               ('v3/config/district', 'restapi.amap.com'), ('v3/geocode/geo', 'restapi.amap.com')]:
+                               ('v3/config/district', 'restapi.amap.com'), ('v3/geocode/geo', 'restapi.amap.com'),
+                               ('v3/geocode/regeo', 'restapi.amap.com')]:
             response = self.client.get('/_AMapService/' + resource,
                 {'key': 'test-js-key', 'jscode': ['malicious', 'duplicate'], 'JSCODE': 'mixed-case', 'keywords': '杭州'},
                 HTTP_AUTHORIZATION='Bearer private-token')
@@ -71,7 +72,9 @@ class AMapProxyTests(TestCase):
                             ('v3//config/district', {}), ('v3/config/district', {'key': 'wrong'}),
                             ('v3/config/district', {'key': ['test-js-key', 'test-js-key']}),
                             ('v3/config/district', {'callback': 'alert(1)'}),
-                            ('v3/config/district', {'keywords': 'x' * 17000})]:
+                            ('v3/config/district', {'keywords': 'x' * 17000}),
+                            ('v3/place/text', {}), ('v3/geocode/geo/extra', {}),
+                            ('v4/random/endpoint', {})]:
             with self.subTest(path=path, query=list(query)):
                 self.assertEqual(self.client.get('/_AMapService/' + path, query).status_code, 400)
         self.assertEqual(self.client.post(self.url).status_code, 405)
@@ -97,3 +100,27 @@ class AMapProxyTests(TestCase):
         upstream.getresponse.return_value.status = 200
         with patch('gathering.amap_proxy.MAX_RESPONSE_BYTES', 2):
             self.assertEqual(self.client.get(self.url).status_code, 502)
+
+    def test_api_quota_is_isolated_from_tiles_and_ip_spoofing(self):
+        self.unlock()
+        with self.settings(AMAP_PROXY_API_LIMIT=2, AMAP_PROXY_TILE_LIMIT=2, TRUSTED_PROXY_HOPS=1):
+            first = {'HTTP_X_FORWARDED_FOR': '203.0.113.10'}
+            for _ in range(2):
+                self.assertEqual(self.client.get(self.url, **first).status_code, 200)
+            # Only the gateway-added suffix is trusted, not a forged prefix.
+            self.assertEqual(self.client.get(self.url,
+                HTTP_X_FORWARDED_FOR='198.51.100.1, 203.0.113.10').status_code, 429)
+            tile_url = '/_AMapService/v3/vectormap'
+            for _ in range(2):
+                self.assertEqual(self.client.get(tile_url, **first).status_code, 200)
+            self.assertEqual(self.client.get(tile_url, **first).status_code, 429)
+            # Another real client IP gets its own quotas.
+            self.assertEqual(self.client.get(self.url,
+                HTTP_X_FORWARDED_FOR='203.0.113.20').status_code, 200)
+
+    def test_disallowed_api_does_not_consume_proxy_quota(self):
+        self.unlock()
+        with self.settings(AMAP_PROXY_API_LIMIT=1):
+            self.assertEqual(self.client.get('/_AMapService/v3/place/text').status_code, 400)
+            self.assertEqual(self.client.get(self.url).status_code, 200)
+            self.assertEqual(self.client.get(self.url).status_code, 429)
