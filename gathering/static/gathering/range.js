@@ -11,7 +11,7 @@ export function mountRange(el, {today, preset, batch = null, onChange}) {
     draw(); onChange(range, preset);
   };
   function draw() {
-    el.innerHTML = `<div class="filter-label">位置确认时间</div><div class="chips" role="group" aria-label="位置确认时间">${labels.map(([key, label]) =>
+    el.innerHTML = `<div class="filter-label">位置确认时间</div><div class="chips${batch ? ' four' : ''}" role="group" aria-label="位置确认时间">${labels.map(([key, label]) =>
       `<button type="button" data-preset="${key}" aria-pressed="${preset === key}" class="${preset === key ? 'on' : ''}">${label}</button>`).join('')}</div>`;
     el.querySelectorAll('[data-preset]').forEach(button => button.onclick = () => set(button.dataset.preset));
   }

@@ -214,7 +214,7 @@ test('when 近三年 has too few people, the page opens on the last big round, s
   await eventually(() => assert.match(app.$('#sheet-summary').textContent, /近三年人很少，已从 2022\.05 那批开始显示/));
   assert.equal(app.$('#sheet-title').textContent, '7 位同学');
   const on = app.$('#range [data-preset].on');
-  assert.equal(on.textContent, '2022.05 那批以来');
+  assert.equal(on.textContent, '2022.05 那批');
   app.click('#range [data-preset="3y"]');
   await eventually(() => assert.equal(app.$('#sheet-title').textContent, '1 位同学'));
   assert.doesNotMatch(app.$('#sheet-summary').textContent, /那批/);

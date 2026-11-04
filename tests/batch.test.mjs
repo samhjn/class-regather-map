@@ -19,11 +19,24 @@ test('years later, the shortcut starts at the last round of updates that had eno
   assert.equal(members.filter(member => inRange(member.location.confirmed_at, presetRange('3y', '2031-05-15'))).length, 2);
 });
 
-test('a round spread over a few months is still one round; a gap of more than six months starts a new one', () => {
-  const spread = people([...repeat('2026-10-20', 3), ...repeat('2027-01-15', 3)]);   // three months apart: one round of 6
-  assert.equal(latestBatch(spread, '2031-05-15').label, '2026.10');
-  const split = people([...repeat('2026-10-20', 3), ...repeat('2027-06-15', 3)]);    // eight months apart: two rounds of 3
-  assert.equal(latestBatch(split, '2031-05-15'), null);
+test('a round is a burst: at least five people within three months; the burst may run on for a while', () => {
+  const burst = people([...repeat('2026-10-20', 3), ...repeat('2026-12-10', 3)]);       // six within three months
+  assert.equal(latestBatch(burst, '2031-05-15').label, '2026.10');
+  const thin = people([...repeat('2026-10-20', 3), ...repeat('2027-03-15', 3)]);        // five months apart: two thin groups
+  assert.equal(latestBatch(thin, '2031-05-15'), null);
+});
+
+test('old stays trickling in every couple of months never chain into one huge round: the 2026.10 burst wins', () => {
+  // Imported records carry their move-in dates as confirmations: one every two months, 2016–2026.
+  const trickle = Array.from({length: 60}, (_, i) => `${2016 + Math.floor(i / 6)}-${String(1 + (i % 6) * 2).padStart(2, '0')}-15`);
+  assert.equal(latestBatch(people(trickle), '2031-05-15'), null);
+  const withLaunch = people([...trickle, ...repeat('2026-10-25', 12), ...repeat('2026-11-05', 6)]);
+  assert.equal(latestBatch(withLaunch, '2031-05-15').label, '2026.10');
+});
+
+test('a lone confirmation a month or two before the launch does not pull the start earlier', () => {
+  const members = people(['2026-08-15', ...repeat('2026-10-25', 12), ...repeat('2026-11-05', 6)]);
+  assert.equal(latestBatch(members, '2031-05-15').label, '2026.10');
 });
 
 test('when no round ever had enough people, there is no shortcut (全部 stays the way to see everyone)', () => {
