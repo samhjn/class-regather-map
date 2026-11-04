@@ -204,3 +204,24 @@ test('after moving abroad the map switches to 世界视野, where the new place 
   app.click('#update-save');
   await eventually(() => assert.ok(app.$('[data-scope="world"]').classList.contains('on')));
 });
+
+const confirmedOn = (id, date) => person(id, stay({id, confirmed_at: `${date}T12:00:00+08:00`}));
+
+test('when 近三年 has too few people, the page opens on the last big round, says so, and offers the other choices', async t => {
+  // today is 2026-10-30 in the test app: a round of 6 in 2022.05, then one person in 2025.
+  const members = [1, 2, 3, 4, 5, 6].map(id => confirmedOn(id, '2022-05-10')).concat(confirmedOn(7, '2025-01-08'));
+  const app = await openApp(t, {members});
+  await eventually(() => assert.match(app.$('#sheet-summary').textContent, /近三年人很少，已从 2022\.05 那批开始显示/));
+  assert.equal(app.$('#sheet-title').textContent, '7 位同学');
+  const on = app.$('#range [data-preset].on');
+  assert.equal(on.textContent, '2022.05 那批以来');
+  app.click('#range [data-preset="3y"]');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '1 位同学'));
+  assert.doesNotMatch(app.$('#sheet-summary').textContent, /那批/);
+});
+
+test('with enough recent people there is no extra choice: the three presets as before', async t => {
+  const app = await openApp(t, {members: [1, 2, 3, 4, 5].map(id => confirmedOn(id, '2026-10-20'))});
+  await eventually(() => assert.equal(app.$('#range [data-preset].on').dataset.preset, '3y'));
+  assert.deepEqual([...app.document.querySelectorAll('#range [data-preset]')].map(button => button.dataset.preset), ['1y', '3y', 'all']);
+});

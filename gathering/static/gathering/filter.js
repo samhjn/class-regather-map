@@ -27,8 +27,31 @@ export function presetRange(preset, today) {
 }
 
 export function inRange(confirmedAt, range) {
+  if (range.preset === 'batch') {const date = confirmedAt?.slice(0, 10); return !!date && date >= range.from && date <= range.today;}
   return range.preset === 'all' || confirmationBucket(confirmedAt, range.today) <= (range.preset === '1y' ? 2 : 3);
 }
+
+// When 近三年 holds too few people (years after the last class-wide update), offer — and open
+// on — the last round of updates that had enough people. Confirmations more than six months
+// apart belong to different rounds. Null while 近三年 is busy enough: the three presets suffice.
+export const BATCH_MIN = 5;
+const monthOf = date => Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1;
+export function latestBatch(members, today) {
+  const recent = presetRange('3y', today);
+  if (members.filter(({location}) => location && inRange(location.confirmed_at, recent)).length >= BATCH_MIN) return null;
+  const dates = members.map(({location}) => location?.confirmed_at?.slice(0, 10)).filter(date => date && date <= today).sort();
+  const rounds = [];
+  for (const date of dates) {
+    const last = rounds.at(-1);
+    if (last && monthOf(date) - monthOf(last.end) <= 6) {last.end = date; last.count++;} else rounds.push({start: date, end: date, count: 1});
+  }
+  const round = rounds.filter(item => item.count >= BATCH_MIN).at(-1);
+  if (!round) return null;
+  const from = round.start.slice(0, 7) + '-01';
+  return {from, label: `${from.slice(0, 4)}.${from.slice(5, 7)}`, count: dates.filter(date => date >= from).length};
+}
+export const batchRange = (batch, today) => ({preset: 'batch', today, from: batch.from});
+export const batchName = batch => `${batch.label} 那批以来`;
 
 // Stable sort preserves the page's shuffled order inside each fuzzy time bucket.
 export const orderByConfirmation = (members, today) => [...members].sort((a, b) =>

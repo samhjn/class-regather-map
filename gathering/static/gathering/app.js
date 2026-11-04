@@ -1,6 +1,6 @@
 import {cityKey, createMemberOrder, municipalities, placeName, prefectureCode} from './logic.js';
 import {ClassMap, chinaDivisions, createFootprintMap, loadMap} from './map.js';
-import {REGIONS, PRESET_LABELS, confirmationLabel, consistentCounts, isStale, levelOf, memberKey, orderByConfirmation, presetRange, splitForRegion} from './filter.js';
+import {REGIONS, PRESET_LABELS, batchName, batchRange, latestBatch, confirmationLabel, consistentCounts, isStale, levelOf, memberKey, orderByConfirmation, presetRange, splitForRegion} from './filter.js';
 import {createSheet} from './sheet.js';
 import {mountRange} from './range.js';
 import {matches, memberRow, otherGroup, placeOf, regionTitle, section, sectionTitle, shortName} from './views.js';
@@ -10,7 +10,8 @@ import {buildEntryLink, readEntryLink} from './links.js';
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {scope: 'china', view: {type: 'home'}, search: '', range: null, preset: '3y', members: [], boot: null};
+// picked: the user chose a time preset themselves, so a refresh must not switch it back.
+const state = {scope: 'china', view: {type: 'home'}, search: '', range: null, preset: '3y', batch: null, picked: false, members: [], boot: null};
 let map, sheet, rangeControl, footprintMap, memberTicket = 0, updateTicket = 0, modalMap, snapshotRequest = 0, toastTimer, modalGeneration = 0;
 const apiRoot = new URL('api/', location.href);
 const orderMembers = createMemberOrder();
@@ -138,12 +139,18 @@ async function refresh() {
   // A tab may stay open overnight; refresh the server-local day with the snapshot.
   state.boot.today = result.at || state.boot.today;
   state.members = orderMembers(result.members);
-  state.range = presetRange(state.preset, state.boot.today);
-  rangeControl = mountRange($('#range'), {today: state.boot.today, preset: state.preset,
-    onChange: (range, preset) => {state.range = range; state.preset = preset; render();}});
+  // Years after the last class-wide update, 近三年 is nearly empty: open on that last round instead.
+  state.batch = latestBatch(state.members, state.boot.today);
+  if (!state.picked) state.preset = state.batch ? 'batch' : '3y';
+  if (state.preset === 'batch' && !state.batch) state.preset = '3y';
+  state.range = state.preset === 'batch' ? batchRange(state.batch, state.boot.today) : presetRange(state.preset, state.boot.today);
+  rangeControl = mountRange($('#range'), {today: state.boot.today, preset: state.preset, batch: state.batch,
+    onChange: (range, preset) => {state.range = range; state.preset = preset; state.picked = true; render();}});
   render();
 }
-const rangeLabel = () => state.preset === 'all' ? '全部记录' : PRESET_LABELS[state.preset] + '确认过位置';
+const presetName = () => state.preset === 'batch' ? batchName(state.batch) : PRESET_LABELS[state.preset];
+const rangeLabel = () => state.preset === 'all' ? '全部记录'
+  : state.preset === 'batch' ? `近三年人很少，已从 ${state.batch.label} 那批开始显示` : PRESET_LABELS[state.preset] + '确认过位置';
 // The update form is half-filled: stay, and say how to leave on purpose.
 function keepDraft() {
   if (state.view.type !== 'update' || !updateHasDraft()) return false;
@@ -182,7 +189,7 @@ function render() {
   map?.setLevel(state.scope);
   map?.update(state.members, state.range);
   map?.select(state.view.type === 'region' ? state.view.key : null);
-  $('#range-chip').innerHTML = `位置确认时间：${PRESET_LABELS[state.preset]}<u>修改</u>`;
+  $('#range-chip').innerHTML = `位置确认时间：${presetName()}<u>修改</u>`;
   $('#range-chip').hidden = state.view.type === 'home';
   renderSheet();
 }
