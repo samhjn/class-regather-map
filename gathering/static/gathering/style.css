@@ -45,7 +45,9 @@ form .primary { width: 100%; margin-top: 18px; }
 /* App shell: the map fills the screen; controls float above it */
 #app { position: fixed; inset: 0; overflow: hidden; overflow: clip; }  /* clip: nothing (focus, scrollIntoView) may scroll the shell */
 .map { position: absolute; inset: 0 0 var(--map-bottom, 0); z-index: 0; background: #e9eef5; }
-#app[data-detent=full] .map { pointer-events: none; }
+/* Phone only: a full sheet leaves just a sliver of map, which must not pan. On wide screens
+   the panel sits beside the map, so the map stays live while it is open. */
+@media (max-width: 719.98px) { #app[data-detent=full] .map { pointer-events: none; } }
 .map-status { position: absolute; z-index: 25; left: 16px; right: 16px; top: calc(120px + var(--safe-top)); background: #fff; border-radius: var(--r-ctl); padding: 12px 14px; box-shadow: var(--shadow); font-size: 14px; }
 .top { position: absolute; top: calc(10px + var(--safe-top)); left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; z-index: 20; }
 .seg { display: flex; background: var(--float); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); border-radius: var(--r-ctl); padding: 3px; box-shadow: var(--shadow); }
@@ -87,6 +89,7 @@ form .primary { width: 100%; margin-top: 18px; }
 .chips { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .chips button { min-height: 44px; border-radius: 22px; padding: 0 16px; font-size: 14px; font-weight: 600; background: var(--chip); }
 .chips button.on { background: var(--ink); color: #fff; }
+.chips.four button { padding: 0 12px; }  /* the extra 「某月 那批」 choice still fits one row on a phone */
 .legend { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .legend i { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px #dcdaee; }
 
@@ -189,6 +192,8 @@ summary { min-height: 44px; display: flex; align-items: center; font-weight: 600
    the right so AMap's logo, scale and review number (bottom-left) are never covered. */
 @media (min-width: 720px) {
   .sheet { left: auto; right: 16px; width: 400px; bottom: 16px; height: calc(100% - 92px); border-radius: var(--r-sheet); }
+  /* The side panel owns the top-right corner: 看全部 moves left of it. */
+  .fit-all { right: calc(16px + 400px + 12px); top: calc(10px + var(--safe-top)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

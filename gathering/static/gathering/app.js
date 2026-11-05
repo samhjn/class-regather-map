@@ -1,16 +1,17 @@
-import {cityKey, createMemberOrder, municipalities, placeName} from './logic.js';
+import {cityKey, createMemberOrder, municipalities, placeName, prefectureCode} from './logic.js';
 import {ClassMap, chinaDivisions, createFootprintMap, loadMap} from './map.js';
-import {REGIONS, PRESET_LABELS, confirmationLabel, consistentCounts, isStale, memberKey, orderByConfirmation, presetRange, splitForRegion} from './filter.js';
+import {REGIONS, PRESET_LABELS, batchName, batchRange, latestBatch, confirmationLabel, consistentCounts, isStale, levelOf, memberKey, orderByConfirmation, presetRange, splitForRegion} from './filter.js';
 import {createSheet} from './sheet.js';
 import {mountRange} from './range.js';
 import {matches, memberRow, otherGroup, placeOf, regionTitle, section, sectionTitle, shortName} from './views.js';
-import {closeUpdate, placeSearch, renderUpdate} from './update.js';
+import {closeUpdate, placeSearch, renderUpdate, updateHasDraft} from './update.js';
 import {dayPicker} from './pickers.js';
 import {buildEntryLink, readEntryLink} from './links.js';
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {scope: 'china', view: {type: 'home'}, search: '', range: null, preset: '3y', members: [], boot: null};
+// picked: the user chose a time preset themselves, so a refresh must not switch it back.
+const state = {scope: 'china', view: {type: 'home'}, search: '', range: null, preset: '3y', batch: null, picked: false, members: [], boot: null};
 let map, sheet, rangeControl, footprintMap, memberTicket = 0, updateTicket = 0, modalMap, snapshotRequest = 0, toastTimer, modalGeneration = 0;
 const apiRoot = new URL('api/', location.href);
 const orderMembers = createMemberOrder();
@@ -22,9 +23,12 @@ $('#unlock-form [name="password"]').value = entry.view_code;
 
 async function api(path, method = 'GET', data) {
   const token = document.cookie.split('; ').find(item => item.startsWith('csrftoken='))?.split('=').slice(1).join('=') || '';
-  const response = await fetch(new URL(path, apiRoot), {method, credentials: 'same-origin', cache: 'no-store',
-    headers: {'Content-Type': 'application/json', 'X-CSRFToken': decodeURIComponent(token)},
-    ...(data === undefined ? {} : {body: JSON.stringify(data)})});
+  let response;
+  try {
+    response = await fetch(new URL(path, apiRoot), {method, credentials: 'same-origin', cache: 'no-store',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': decodeURIComponent(token)},
+      ...(data === undefined ? {} : {body: JSON.stringify(data)})});
+  } catch {throw new Error('网络连接失败，请检查网络后重试。');}  // the browser's own text is English ("Failed to fetch")
   let result;
   try {result = await response.json();} catch {throw new Error('服务暂时不可用，请稍后重试。');}
   if (!response.ok) throw Object.assign(new Error(result.error || '请求失败，请刷新重试。'), {status: response.status});
@@ -80,7 +84,7 @@ async function boot() {
   if (pendingClaim && !boot.me) {pendingClaim = false; authDialog('claim');}
   // The map ends where the sheet begins, so AMap's logo, scale and review number stay
   // visible above it (they are never moved or hidden).
-  sheet ||= createSheet($('#sheet'), {stops: sheetStops, openTo: () => wide.matches ? 'full' : 'half', onChange: (detent, height) => {
+  sheet ||= createSheet($('#sheet'), {stops: sheetStops, openTo, onChange: (detent, height) => {
     $('#app').dataset.detent = detent;
     // Phones: the map ends where the sheet begins. Wide screens: the panel floats on the right.
     $('#app').style.setProperty('--map-bottom', wide.matches ? '0px' : `${detent === 'full' ? sheetStops().peek : height}px`);
@@ -106,7 +110,12 @@ async function boot() {
       map ||= new ClassMap(A, 'map', {divisions: loadDivisions(), onPick: openRegion, onClusterPick: () => {},
         onBlank: () => {if (sheet.detent !== 'peek') sheet.snap('peek');},
         onUserMoved: () => {$('#fit-all').hidden = false;},
-        onUnplaced: n => {$('#unplaced').hidden = !n; $('#unplaced').textContent = n ? `地图上暂时少画了 ${n} 人，名单是完整的` : '';}});
+        onUnplaced: n => {
+          const text = n ? `地图上暂时少画了 ${n} 人，名单是完整的` : '';
+          if ($('#unplaced').textContent === text) return;
+          $('#unplaced').hidden = !n; $('#unplaced').textContent = text;
+          sheet.snap(sheet.detent, false);  // the bar just grew or shrank: re-measure its stops
+        }});
       $('#map-status').hidden = true;
       render();
       map.fit();
@@ -121,6 +130,8 @@ function sheetStops() {
   return {peek, half: Math.min(full - 80, Math.max(Math.round(innerHeight * 0.55), peek + 160)), full};
 }
 const wide = matchMedia('(min-width: 720px)');
+// "Open" is half a phone screen, but the whole side panel on wide screens (it has no half).
+const openTo = () => wide.matches ? 'full' : 'half';
 async function refresh() {
   const request = ++snapshotRequest;
   const result = await api('snapshot');
@@ -128,22 +139,36 @@ async function refresh() {
   // A tab may stay open overnight; refresh the server-local day with the snapshot.
   state.boot.today = result.at || state.boot.today;
   state.members = orderMembers(result.members);
-  state.range = presetRange(state.preset, state.boot.today);
-  rangeControl = mountRange($('#range'), {today: state.boot.today, preset: state.preset,
-    onChange: (range, preset) => {state.range = range; state.preset = preset; render();}});
+  // Years after the last class-wide update, 近三年 is nearly empty: open on that last round instead.
+  state.batch = latestBatch(state.members, state.boot.today);
+  if (!state.picked) state.preset = state.batch ? 'batch' : '3y';
+  if (state.preset === 'batch' && !state.batch) state.preset = '3y';
+  state.range = state.preset === 'batch' ? batchRange(state.batch, state.boot.today) : presetRange(state.preset, state.boot.today);
+  rangeControl = mountRange($('#range'), {today: state.boot.today, preset: state.preset, batch: state.batch,
+    onChange: (range, preset) => {state.range = range; state.preset = preset; state.picked = true; render();}});
   render();
 }
-const rangeLabel = () => state.preset === 'all' ? '全部记录' : PRESET_LABELS[state.preset] + '确认过位置';
+const presetName = () => state.preset === 'batch' ? batchName(state.batch) : PRESET_LABELS[state.preset];
+const rangeLabel = () => state.preset === 'all' ? '全部记录'
+  : state.preset === 'batch' ? `近三年人很少，已从 ${state.batch.label} 那批开始显示` : PRESET_LABELS[state.preset] + '确认过位置';
+// The update form is half-filled: stay, and say how to leave on purpose.
+function keepDraft() {
+  if (state.view.type !== 'update' || !updateHasDraft()) return false;
+  notify('更新还没保存：先保存，或点右上角 × 关掉表单', true);
+  return true;
+}
 function setScope(scope) {
+  if (keepDraft()) return;
   closeUpdate();
   $('#fit-all').hidden = true;
   state.scope = scope; state.view = {type: 'home'};
   render(); sheet.snap('peek'); map?.fit();
 }
 function openRegion(key, level) {
+  if (keepDraft()) return;
   closeUpdate();
   state.view = {type: 'region', key, level};
-  render(); sheet.snap('half');
+  render(); sheet.snap(openTo());
   map?.focus(key);  // after the snap, so the dot lands in the middle of the visible map
 }
 function goHome() {
@@ -164,7 +189,7 @@ function render() {
   map?.setLevel(state.scope);
   map?.update(state.members, state.range);
   map?.select(state.view.type === 'region' ? state.view.key : null);
-  $('#range-chip').innerHTML = `位置确认时间：${PRESET_LABELS[state.preset]}<u>修改</u>`;
+  $('#range-chip').innerHTML = `位置确认时间：${presetName()}<u>修改</u>`;
   $('#range-chip').hidden = state.view.type === 'home';
   renderSheet();
 }
@@ -177,6 +202,12 @@ function renderSheet() {
   const counts = consistentCounts(state.members, state.range);
   let html;
   $('#search-box').hidden = !home;
+  const shown = counts.total, missing = state.members.filter(member => !member.location).length;
+  if (home) {
+    // A member opened from search results must not leave its name behind as the title.
+    $('#sheet-title').textContent = `${shown} 位同学`;
+    $('#sheet-summary').textContent = `${rangeLabel()} · 全班 ${state.members.length} 人${missing ? ` · 另有 ${missing} 人未填位置` : ''}`;
+  }
   if (home && state.search.trim()) {
     // Search covers everyone — any scope, any confirm time, no location yet — so nobody is unreachable.
     const found = state.members.filter(member => matches(member, state.search.trim()));
@@ -185,10 +216,6 @@ function renderSheet() {
   }
   if (home) {
     // The list always covers the class; view shortcuts only change the map camera.
-    const shown = counts.total;
-    $('#sheet-title').textContent = `${shown} 位同学`;
-    const missing = state.members.filter(member => !member.location).length;
-    $('#sheet-summary').textContent = `${rangeLabel()} · 全班 ${state.members.length} 人${missing ? ` · 另有 ${missing} 人未填位置` : ''}`;
     const {inRange: fresh, others} = splitForRegion(state.members, null, null, state.range);
     const other = otherGroup();
     const remaining = Math.max(0, fresh.length - 3) + others.length + missing;
@@ -214,7 +241,7 @@ function unplacedGroup() {
   const unplaced = state.members.filter(member => !member.location);
   return unplaced.length ? section('还没填位置', unplaced.length) + rows(unplaced) : '';
 }
-function authDialog(mode, draft = entry, useCode = !draft.name && !!draft.student_code) {
+function authDialog(mode, draft = entry, useCode = !draft.name && !!draft.student_code, then = null) {
   const claim = mode === 'claim';
   openModal(claim ? '认领我的身份' : '同学，欢迎回来', `<div class="segmented auth-tabs"><button id="tab-login" class="${claim ? '' : 'active'}">个人登录</button><button id="tab-claim" class="${claim ? 'active' : ''}">首次认领</button></div>
     <p class="muted">${claim ? '填写姓名和管理员发给你的一次性认领码，再设置自己的密码。个人密码至少 6 位，允许纯数字，无需混合字母或符号。' : '使用名单中的姓名和自己设置的密码登录。'}</p>
@@ -232,11 +259,12 @@ function authDialog(mode, draft = entry, useCode = !draft.name && !!draft.studen
   $('#auth-form').addEventListener('input', remember);
   $('#tab-login').onclick = () => authDialog('login', remember(), useCode);
   $('#tab-claim').onclick = () => authDialog('claim', remember(), useCode);
-  $('#identity-toggle').onclick = () => authDialog(mode, remember(), !useCode);
+  $('#identity-toggle').onclick = () => authDialog(mode, remember(), !useCode, then);
   bindForm('#auth-form', async data => {
     await api(claim ? 'claim' : 'login', 'POST', data);
     entry.claim_code = ''; pendingClaim = false;
     closeModal(); await boot(); notify(claim ? '认领成功，可以更新自己的位置了。' : '已登录');
+    if (then && state.boot.me) await then();  // e.g. 我 → log in → straight on to the update form
   });
 }
 function passwordDialog() {
@@ -248,11 +276,12 @@ function passwordDialog() {
 async function memberDialog(id) {
   closeModal(); closeUpdate();
   // A newer tap wins: an older request that lands late must not build a second footprint map.
-  const ticket = ++memberTicket;
+  const ticket = ++memberTicket, from = state.view;
   const detail = await api(`members/${id}`), member = detail.member;
-  if (ticket !== memberTicket) return;
+  if (ticket !== memberTicket || state.view !== from) return;  // a newer tap, or the user went elsewhere meanwhile
   const chronological = detail.locations;
-  const back = state.view.type === 'member' ? state.view.back : state.view;
+  // Remember how the list was showing (height, scroll), so × brings back exactly that.
+  const back = state.view.type === 'member' ? state.view.back : {...state.view, detent: sheet.detent, scroll: $('#sheet-body').scrollTop};
   state.view = {type: 'member', id, back};
   footprintMap?.destroy(); footprintMap = null;
   $('#range').hidden = true; $('#legend').hidden = true; $('#region-close').hidden = false; $('#account').hidden = true; $('#search-box').hidden = true;
@@ -278,6 +307,7 @@ async function memberDialog(id) {
   } catch (error) {if (state.view.id === id) $('#footprint-map').textContent = error.message;}
 }
 async function openUpdate() {
+  if (keepDraft()) return;
   const me = state.boot.me;
   const current = state.members.find(member => member.id === me.id)?.location || null;
   const back = state.view.type === 'update' ? state.view.back : state.view;
@@ -297,7 +327,14 @@ async function openUpdate() {
   if (ticket !== updateTicket || state.view.type !== 'update' || !$('#update')) return;
   renderUpdate($('#update'), {me, current, bio: mine.bio || '', memberVersion: mine.updated_at, today: state.boot.today, api, notify, countries: state.boot.countries || {}, provinces: state.boot.provinces || {},
     divisions: () => state.divisions, locate: locateCity,
-    onDone: async () => {closeUpdate(); await refresh(); goHome();},
+    onDone: async () => {
+      closeUpdate(); await refresh();
+      // A move abroad (or back home) is shown where it now is: 世界视野 or 中国视野.
+      const mine = state.members.find(member => member.id === me.id)?.location;
+      const scope = mine ? levelOf(mine) : state.scope;
+      if (scope !== state.scope) setScope(scope); else goHome();
+    },
+    onSavedAfterLeaving: () => refresh().catch(() => {}),
     onStale: () => run(async () => {await refresh(); await openUpdate();}),
     onNotMe: () => run(async () => {await api('logout', 'POST', {}); goHome(); await boot(); authDialog('login');})});
 }
@@ -314,7 +351,7 @@ function locateCity() {
           const adcode = geo?.regeocode?.addressComponent?.adcode;
           if (geoStatus !== 'complete' || !adcode) {reject(new Error('没能识别所在城市，请直接输入。')); return;}
           const province = adcode.slice(0, 2) + '0000';
-          resolve(state.divisions?.cities.get(municipalities.has(province) ? province : adcode.slice(0, 4) + '00') || null);
+          resolve(state.divisions?.cities.get(municipalities.has(province) ? province : prefectureCode(adcode)) || null);
         });
       });
     }, () => reject(new Error('未能获取设备位置，请直接输入城市。')), {timeout: 15000, maximumAge: 0});
@@ -326,14 +363,16 @@ function leaveUpdate() {
   // A member detail is not part of render(): rebuild it (and its footprint map) explicitly.
   if (back.type === 'member') {state.view = back.back || {type: 'home'}; run(() => memberDialog(back.id)); return;}
   state.view = back;
-  render(); sheet.snap(state.view.type === 'home' ? 'peek' : 'half');
+  render(); sheet.snap(state.view.type === 'home' ? 'peek' : openTo());
 }
 function leaveMember() {
   footprintMap?.destroy(); footprintMap = null;
   state.view = state.view.back || {type: 'home'};
   // Update forms, like member details, must be rebuilt rather than passed to renderSheet().
   if (state.view.type === 'update') {run(openUpdate); return;}
-  render(); sheet.snap(state.view.type === 'home' ? 'peek' : 'half');
+  const {detent, scroll} = state.view;
+  render(); sheet.snap(detent || (state.view.type === 'home' ? 'peek' : openTo()));
+  if (scroll) $('#sheet-body').scrollTop = scroll;
 }
 function profileDialog(member) {
   openModal('编辑我的资料', `<form id="profile-form"><label>姓名 / 昵称<input name="name" maxlength="60" value="${escape(member.name)}" required></label><p class="muted">修改后请使用新的姓名登录。</p><label>一句近况<textarea name="bio" maxlength="240">${escape(member.bio)}</textarea></label><button type="submit" class="primary">保存资料</button></form>`);
@@ -411,7 +450,7 @@ function locationDialog(member, loc = {}) {
         if (!state.boot.provinces[province]) return;
         $('#province-code').value = province;
         const adcode = String(address.adcode);
-        $('#city-code').value = cityKey(adcode.slice(2, 4) === '90' ? adcode : adcode.slice(0, 4) + '00', province);
+        $('#city-code').value = cityKey(prefectureCode(adcode), province);
         $('#city-name').value = municipalities.has(province) ? state.boot.provinces[province] : (Array.isArray(address.city) ? address.district : address.city) || address.district;
         $('#place-input').value = shortName($('#city-name').value);
         placeSelected = true;
@@ -543,8 +582,8 @@ document.querySelectorAll('[data-scope]').forEach(button => button.onclick = () 
 $('#search').addEventListener('input', event => {state.search = event.target.value; renderSheet();});
 $('#fit-all').onclick = () => {map?.fit(); $('#fit-all').hidden = true;};
 $('#region-close').onclick = () => state.view.type === 'member' ? leaveMember() : state.view.type === 'update' ? leaveUpdate() : goHome();
-$('#range-chip').onclick = () => {goHome(); sheet.snap('half'); $('#range').scrollIntoView({block: 'nearest'});};
-$('#me-btn').onclick = () => state.boot.me ? run(openUpdate) : authDialog('login');
+$('#range-chip').onclick = () => {goHome(); sheet.snap(openTo()); $('#range').scrollIntoView({block: 'nearest'});};
+$('#me-btn').onclick = () => state.boot.me ? run(openUpdate) : authDialog('login', entry, undefined, openUpdate);
 // Keep the save bar above the on-screen keyboard (visual viewport shrinks, layout viewport does not).
 visualViewport?.addEventListener('resize', () => document.documentElement.style.setProperty('--kb', `${Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop)}px`));
 $('#list').addEventListener('click', event => {

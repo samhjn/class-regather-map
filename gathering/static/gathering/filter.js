@@ -27,8 +27,38 @@ export function presetRange(preset, today) {
 }
 
 export function inRange(confirmedAt, range) {
+  if (range.preset === 'batch') {const date = confirmedAt?.slice(0, 10); return !!date && date >= range.from && date <= range.today;}
   return range.preset === 'all' || confirmationBucket(confirmedAt, range.today) <= (range.preset === '1y' ? 2 : 3);
 }
+
+// When 近三年 holds too few people (years after the last class-wide update), offer — and open
+// on — the last round of updates. A round is a burst: at least five confirmations within three
+// months (a launch gets everyone updating within weeks). Old imported stays, whose confirmation
+// is their move-in date, trickle in too thinly to form one, so they never chain into a round.
+// Null while 近三年 is busy enough: the three presets suffice.
+export const BATCH_MIN = 5;
+const BURST_MONTHS = 3;
+const monthOf = date => Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1;
+export function latestBatch(members, today) {
+  const recent = presetRange('3y', today);
+  if (members.filter(({location}) => location && inRange(location.confirmed_at, recent)).length >= BATCH_MIN) return null;
+  const dates = members.map(({location}) => location?.confirmed_at?.slice(0, 10)).filter(date => date && date <= today).sort();
+  const months = dates.map(monthOf);
+  // A month opens a burst if it and the next two months hold enough confirmations.
+  const opens = [...new Set(months)].filter(m => months.filter(n => n >= m && n < m + BURST_MONTHS).length >= BATCH_MIN);
+  if (!opens.length) return null;
+  // The latest burst, followed back to where it began (bursting months that touch it).
+  let start = opens.at(-1);
+  for (let i = opens.length - 2; i >= 0 && start - opens[i] < BURST_MONTHS; i--) start = opens[i];
+  // A month counts as "opening" when the burst merely lies ahead of it: a lone confirmation a
+  // month or two before the launch must not become the start.
+  const count = m => months.filter(n => n === m).length;
+  while (start < opens.at(-1) && count(start) < 2) start = months.find(n => n > start);
+  const from = `${Math.floor(start / 12)}-${String(start % 12 + 1).padStart(2, '0')}-01`;
+  return {from, label: `${from.slice(0, 4)}.${from.slice(5, 7)}`, count: dates.filter(date => date >= from).length};
+}
+export const batchRange = (batch, today) => ({preset: 'batch', today, from: batch.from});
+export const batchName = batch => `${batch.label} 那批`;
 
 // Stable sort preserves the page's shuffled order inside each fuzzy time bucket.
 export const orderByConfirmation = (members, today) => [...members].sort((a, b) =>

@@ -62,9 +62,16 @@ test('history editing uses the city search and the day picker', async ({page}, i
   await expect(page.locator('#member-detail')).toContainText(`${y1}-03-15 → ${y2}-07-01`);
 });
 
-test('account links are reachable from the half sheet without scrolling the list', async ({page}) => {
+test('a visitor finds 登录 on 我; the account links follow the list', async ({page}) => {
+  // The half sheet shows people first (2026-11-01); the links sit after the list instead.
   await unlock(page);
+  await page.locator('#me-btn').click();
+  await expect(page.locator('#modal')).toContainText('登录');
+  await page.locator('#modal-close').click();
   const {dragSheet: drag} = await import('./helpers.mjs');
-  await drag(page, -220);
+  await drag(page, -700);
+  await page.locator('#account [data-act="login"]').scrollIntoViewIfNeeded();
   await expect(page.locator('#account [data-act="login"]')).toBeInViewport();
+  const after = await page.evaluate(() => document.querySelector('#list').compareDocumentPosition(document.querySelector('#account')) & Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(after).toBeTruthy();
 });

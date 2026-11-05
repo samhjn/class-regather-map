@@ -61,6 +61,9 @@ export function createSheet(el, {stops, onChange = () => {}, openTo = () => 'hal
     removeEventListener('pointermove', move);
     removeEventListener('pointerup', release);
     removeEventListener('pointercancel', release);
+    // The system took the touch (a scroll, a call, a gesture): not a tap, and no flick.
+    const cancelled = event.type === 'pointercancel';
+    if (!active && cancelled) return;
     if (!active) {
       // A plain tap on the bar (not on a control in it) opens it, or folds it back.
       if (drag_target?.closest('[data-drag]') && !drag_target.closest('button, a, input, label, .picker')) snap(detent === 'peek' ? openTo() : 'peek');
@@ -68,13 +71,14 @@ export function createSheet(el, {stops, onChange = () => {}, openTo = () => 'hal
     }
     el.dataset.justDragged = '1';
     setTimeout(() => delete el.dataset.justDragged, 0);
-    // Only motion in the last 100 ms counts: a finger that stopped before lifting has no flick.
-    const last = samples.at(-1), recent = samples.filter(sample => last && sample.t >= last.t - 100), first = recent[0];
+    // Only motion in the 100 ms before the finger lifted counts: one that stopped and held
+    // still first has no flick, however fast it moved before.
+    const recent = cancelled ? [] : samples.filter(sample => sample.t >= event.timeStamp - 100), first = recent[0], last = recent.at(-1);
     const velocity = first && last.t > first.t ? (first.y - last.y) / (last.t - first.t) * 1000 : 0;
     snap(nearestStop(height + project(velocity), stops()));
   };
   el.addEventListener('pointerdown', event => {
-    if (event.button > 0) return;
+    if (event.button > 0 || drag) return;  // one finger drives the sheet; a second one is ignored
     // In full the body scrolls, so only the handle and header start a drag.
     if (detent === 'full' && !event.target.closest('[data-drag]')) return;
     drag = {id: event.pointerId, target: event.target, startY: event.clientY, startHeight: currentHeight(), active: false, samples: []};
