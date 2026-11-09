@@ -58,7 +58,7 @@ export function latestBatch(members, today) {
   return {from, label: `${from.slice(0, 4)}.${from.slice(5, 7)}`, count: dates.filter(date => date >= from).length};
 }
 export const batchRange = (batch, today) => ({preset: 'batch', today, from: batch.from});
-export const batchName = batch => `${batch.label} 那批`;
+export const batchName = batch => `${batch.label} 至今`;
 
 // Stable sort preserves the page's shuffled order inside each fuzzy time bucket.
 export const orderByConfirmation = (members, today) => [...members].sort((a, b) =>
