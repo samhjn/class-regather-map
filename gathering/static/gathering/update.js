@@ -81,11 +81,18 @@ export function renderUpdate(root, ctx) {
   const notePart = bio => bio === opened.bio ? {} : {bio, member_version: memberVersion};
   // After a conflict: take the server's latest versions and values; untouched inputs follow
   // the server, edited ones keep what the user typed.
-  async function refreshVersions(inputs) {
+  async function refreshVersions(inputs, {requireChangedLocation = false} = {}) {
     const detail = await api(`members/${me.id}`);
-    memberVersion = detail.member.updated_at;
     const latest = {bio: detail.member.bio || '', label: ''};
     const fresh = current && detail.locations.find(loc => loc.id === current.id);
+    if (requireChangedLocation) {
+      // Retrying a same-day correction is safe only if it still edits the same stay.
+      if (!fresh || fresh.started_on !== current.started_on || fresh.ended_on !== current.ended_on)
+        throw new Error('当前足迹已经变化，请关闭更新页后重新打开再保存');
+      if (fresh.version === current.version)
+        throw new Error('位置日期可能与其他足迹重叠，请检查历史足迹后再保存');
+    }
+    memberVersion = detail.member.updated_at;
     if (fresh) {Object.assign(current, fresh); latest.label = fresh.label || '';}
     for (const key of ['label', 'bio']) {
       const input = inputs[key];
@@ -95,13 +102,14 @@ export function renderUpdate(root, ctx) {
   }
   // While refreshing, the caller keeps saving disabled; settle() then re-derives the button
   // from the form's own rules (it never just switches it back on).
-  async function afterConflict(err, inputs, error, settle) {
+  async function afterConflict(err, inputs, error, settle, options = {}) {
     error.textContent = `${reason(err)}。正在刷新…`;
     try {
-      await refreshVersions(inputs);
+      await refreshVersions(inputs, options);
       error.textContent = `${reason(err)}。已刷新，你改的内容还在，再点一次保存就行。`;
-    } catch {
-      error.textContent = `${reason(err)}。没刷新成功，请检查网络后再点保存。`;
+    } catch (refreshErr) {
+      error.textContent = /^(当前足迹|位置日期)/.test(refreshErr?.message || '')
+        ? `${reason(refreshErr)}。` : `${reason(err)}。没刷新成功，请检查网络后重新打开页面。`;
     }
     settle();
   }
@@ -213,9 +221,12 @@ export function renderUpdate(root, ctx) {
         if (left()) return;
         saving = false;
         setBusy(false);
-        if (err.status === 409 && /备注/.test(err.message)) {
+        if (err.status === 409 && (correcting || /备注/.test(err.message))) {
+          // A same-day PATCH may have a stale Location.version, not only a stale bio.
+          // Refresh that version before offering another attempt; keep the picked city.
           refreshing = true; sync(); save.textContent = '保存';
-          await afterConflict(err, {bio: root.querySelector('#update-bio')}, error, () => {refreshing = false; sync();});
+          await afterConflict(err, {bio: root.querySelector('#update-bio')}, error,
+            () => {refreshing = false; sync();}, {requireChangedLocation: correcting && !/备注/.test(err.message)});
           return;
         }
         save.textContent = '保存';
