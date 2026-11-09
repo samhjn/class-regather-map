@@ -207,17 +207,44 @@ test('after moving abroad the map switches to 世界视野, where the new place 
 
 const confirmedOn = (id, date) => person(id, stay({id, confirmed_at: `${date}T12:00:00+08:00`}));
 
+test('an earlier save finishing its refresh must not navigate away from a newly opened update draft', async t => {
+  let hold = false, heldOnce = false, release;
+  const pending = new Promise(resolve => {release = resolve;});
+  const app = await openApp(t, {intercept: ({route}) => {
+    if (route === 'snapshot' && hold && !heldOnce) {heldOnce = true; return pending;}
+    return null;
+  }});
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-move')));
+  app.click('#update-move');
+  app.input('#place-input', '日本');
+  app.click('.sugg [data-place="0"]');
+  hold = true;
+  app.click('#update-save');
+  await eventually(() => assert.equal(heldOnce, true));
+  // Save has succeeded. The old onDone is now waiting for its snapshot.
+  app.click('#region-close');
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-confirm')));
+  app.click('#update-confirm');
+  app.input('#update-label', '新打开的表单草稿');
+  release();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(app.$('#sheet-title').textContent, '更新我的位置');
+  assert.equal(app.$('#update-label').value, '新打开的表单草稿');
+});
+
 test('when 近三年 has too few people, the page opens on the last big round, says so, and offers the other choices', async t => {
   // today is 2026-10-30 in the test app: a round of 6 in 2022.05, then one person in 2025.
   const members = [1, 2, 3, 4, 5, 6].map(id => confirmedOn(id, '2022-05-10')).concat(confirmedOn(7, '2025-01-08'));
   const app = await openApp(t, {members});
-  await eventually(() => assert.match(app.$('#sheet-summary').textContent, /近三年人很少，已从 2022\.05 那批开始显示/));
+  await eventually(() => assert.match(app.$('#sheet-summary').textContent, /近三年确认人数较少，已显示 2022\.05 至今的记录/));
   assert.equal(app.$('#sheet-title').textContent, '7 位同学');
   const on = app.$('#range [data-preset].on');
-  assert.equal(on.textContent, '2022.05 那批');
+  assert.equal(on.textContent, '2022.05 至今');
   app.click('#range [data-preset="3y"]');
   await eventually(() => assert.equal(app.$('#sheet-title').textContent, '1 位同学'));
-  assert.doesNotMatch(app.$('#sheet-summary').textContent, /那批/);
+  assert.doesNotMatch(app.$('#sheet-summary').textContent, /至今/);
 });
 
 test('with enough recent people there is no extra choice: the three presets as before', async t => {

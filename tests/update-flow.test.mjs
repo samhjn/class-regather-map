@@ -110,6 +110,49 @@ test('a second move on the same day corrects today\'s stay instead of being refu
   assert.equal(write.data.longitude, '');                  // the old city's point must not travel with the new city
 });
 
+test('a same-day correction refreshes the Location.version after a 409 and retries the chosen city', async () => {
+  const patches = [];
+  const oldStay = {...hangzhou(), started_on: '2026-11-01'};
+  const api = async (path, method, data) => {
+    if (method === 'PATCH') {
+      patches.push(data);
+      if (patches.length === 1) throw Object.assign(new Error('记录已被更新，请刷新后再编辑。'), {status: 409});
+      return {};
+    }
+    if (path === 'members/1') return {member: {bio: '', updated_at: 'm2'}, locations: [{...oldStay, version: 'v2'}]};
+    return {};
+  };
+  const ui = mount({current: oldStay, api});
+  ui.$('#update-move').click();
+  ui.type('#place-input', '深圳');
+  ui.$('.sugg [data-place]').click();
+  ui.$('#update-save').click();
+  await settle();
+  assert.match(ui.$('.field-error').textContent, /已刷新/);
+  assert.equal(ui.$('#place-input').value, '深圳');
+  ui.$('#update-save').click();
+  await settle();
+  assert.deepEqual(patches.map(p => p.version), ['v1', 'v2']);
+  assert.deepEqual(patches.map(p => p.city_code), ['440300', '440300']);
+});
+
+test('a same-day correction does not promise a retry if the old stay was replaced', async () => {
+  const oldStay = {...hangzhou(), started_on: '2026-11-01'};
+  const api = async (path, method) => {
+    if (method === 'PATCH') throw Object.assign(new Error('记录已被更新，请刷新后再编辑。'), {status: 409});
+    if (path === 'members/1') return {member: {bio: '', updated_at: 'm2'}, locations: []};
+    return {};
+  };
+  const ui = mount({current: oldStay, api});
+  ui.$('#update-move').click();
+  ui.type('#place-input', '深圳');
+  ui.$('.sugg [data-place]').click();
+  ui.$('#update-save').click();
+  await settle();
+  assert.match(ui.$('.field-error').textContent, /关闭更新页后重新打开/);
+  assert.doesNotMatch(ui.$('.field-error').textContent, /再点一次保存/);
+});
+
 test('a failed save keeps its message in place while retrying, and the reason reads without a doubled 。', async () => {
   let attempt = 0;
   const api = async path => {
