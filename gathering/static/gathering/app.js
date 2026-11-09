@@ -150,7 +150,7 @@ async function refresh() {
 }
 const presetName = () => state.preset === 'batch' ? batchName(state.batch) : PRESET_LABELS[state.preset];
 const rangeLabel = () => state.preset === 'all' ? '全部记录'
-  : state.preset === 'batch' ? `近三年人很少，已从 ${state.batch.label} 那批开始显示` : PRESET_LABELS[state.preset] + '确认过位置';
+  : state.preset === 'batch' ? `近三年确认人数较少，已显示 ${batchName(state.batch)}的记录` : PRESET_LABELS[state.preset] + '确认过位置';
 // The update form is half-filled: stay, and say how to leave on purpose.
 function keepDraft() {
   if (state.view.type !== 'update' || !updateHasDraft()) return false;
@@ -325,10 +325,13 @@ async function openUpdate() {
   const {member: mine} = await api(`members/${me.id}`);
   // A newer tap on 我 (or leaving the page) wins: a late response must not wipe a draft.
   if (ticket !== updateTicket || state.view.type !== 'update' || !$('#update')) return;
+  const updateView = state.view;  // only this form may navigate after its save/refresh completes
   renderUpdate($('#update'), {me, current, bio: mine.bio || '', memberVersion: mine.updated_at, today: state.boot.today, api, notify, countries: state.boot.countries || {}, provinces: state.boot.provinces || {},
     divisions: () => state.divisions, locate: locateCity,
     onDone: async () => {
+      if (state.view !== updateView) return;
       closeUpdate(); await refresh();
+      if (state.view !== updateView) return;  // user navigated away or opened a new draft during refresh
       // A move abroad (or back home) is shown where it now is: 世界视野 or 中国视野.
       const mine = state.members.find(member => member.id === me.id)?.location;
       const scope = mine ? levelOf(mine) : state.scope;
