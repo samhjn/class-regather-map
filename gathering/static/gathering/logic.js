@@ -2,6 +2,9 @@ export const municipalities = new Set(['110000', '120000', '310000', '500000', '
 export const chinaCountry = code => ['CHN', 'CN', 'TWN', 'HKG', 'MAC', 'TW', 'HK', 'MO'].includes(code) ? 'CHN' : code;
 export const provinceKey = props => String(props.adcode_pro || props.adcode || '').slice(0, 2) + '0000';
 export const cityKey = (code, province) => municipalities.has(province) ? province : String(code || '');
+// The prefecture an adcode belongs to. County-level cities run directly by a province
+// (仙桃 429004, 济源 419001, 五指山 469001 …) carry 90 in digits 3–4 and are their own entry.
+export const prefectureCode = adcode => String(adcode).slice(2, 4) === '90' ? String(adcode) : String(adcode).slice(0, 4) + '00';
 export const regionKey = (location, level) => level === 'world' ? location.country_code : level === 'china' ? location.province_code : location.city_code || 'unknown-city';
 export function inScope(location, state) {
   if (!location) return state.unknown || (state.level === 'world' && !state.selected);

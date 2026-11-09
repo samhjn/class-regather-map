@@ -129,3 +129,99 @@ test('refresh after midnight uses the new server day for confirmation labels and
   assert.match(app.$('[data-member="2"] .tag').textContent, /近1周/);
   assert.match(app.$('[data-member="1"] .tag').textContent, /近3年/);
 });
+
+test('a member detail that arrives after the user went on to 我 does not pull the page back', async t => {
+  let release;
+  const held = new Promise(resolve => {release = resolve;});
+  const app = await openApp(t, {members: [person(1), person(2)], intercept: ({route}) => route === 'members/2' ? held : null});
+  app.input('#search', '同学2');
+  app.click('#list [data-member="2"]');
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-confirm')));
+  release();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(app.$('#sheet-title').textContent, '更新我的位置');
+  assert.ok(app.document.querySelector('#update-confirm'));
+});
+
+test('back from a member opened in search results restores the list title', async t => {
+  const app = await openApp(t, {members: [person(1), person(2)]});
+  app.input('#search', '同学2');
+  app.click('#list [data-member="2"]');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '同学2'));
+  app.click('#region-close');
+  await eventually(() => assert.match(app.$('#sheet-title').textContent, /位同学/));
+  assert.match(app.$('#sheet-summary').textContent, /全班 2 人/);
+});
+
+test('a lost connection reads as a Chinese network message, not the browser\'s English', async t => {
+  const app = await openApp(t, {intercept: ({route}) => route === 'members/1' ? Promise.reject(new TypeError('Failed to fetch')) : null});
+  app.click('#me-btn');
+  await eventually(() => assert.match(app.$('#toast').textContent, /网络/));
+  assert.doesNotMatch(app.$('#toast').textContent, /Failed to fetch/);
+});
+
+test('back from a member returns to the panel height the list was at', async t => {
+  const app = await openApp(t, {members: [person(1), person(2)]});
+  app.click('#sheet .grab');                                     // wide: open to full
+  await eventually(() => assert.equal(app.$('#sheet').dataset.detent, 'full'));
+  app.click('#list [data-member="2"]');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '同学2'));
+  app.click('#region-close');
+  await eventually(() => assert.match(app.$('#sheet-title').textContent, /位同学/));
+  assert.equal(app.$('#sheet').dataset.detent, 'full');
+});
+
+test('switching 中国视野/世界视野 while an update draft is open keeps the draft and says why', async t => {
+  const app = await openApp(t);
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-confirm')));
+  app.click('#update-confirm');
+  app.input('#update-label', '新单位');
+  app.click('[data-scope="world"]');
+  assert.equal(app.$('#update-label').value, '新单位');
+  assert.match(app.$('#toast').textContent, /还没保存/);
+});
+
+test('logging in from 我 goes straight on to the update form', async t => {
+  const app = await openApp(t, {signedIn: false});
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#modal form')));
+  const form = app.document.querySelector('#modal form');
+  form.querySelector('[name="name"]').value = '同学1';
+  form.querySelector('[name="password"]').value = '123456';
+  app.submit('#modal form');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '更新我的位置'));
+});
+
+test('after moving abroad the map switches to 世界视野, where the new place is', async t => {
+  const app = await openApp(t);
+  app.click('#me-btn');
+  await eventually(() => assert.ok(app.document.querySelector('#update-move')));
+  app.click('#update-move');
+  app.input('#place-input', '日本');
+  app.click('.sugg [data-place="0"]');
+  app.click('#update-save');
+  await eventually(() => assert.ok(app.$('[data-scope="world"]').classList.contains('on')));
+});
+
+const confirmedOn = (id, date) => person(id, stay({id, confirmed_at: `${date}T12:00:00+08:00`}));
+
+test('when 近三年 has too few people, the page opens on the last big round, says so, and offers the other choices', async t => {
+  // today is 2026-10-30 in the test app: a round of 6 in 2022.05, then one person in 2025.
+  const members = [1, 2, 3, 4, 5, 6].map(id => confirmedOn(id, '2022-05-10')).concat(confirmedOn(7, '2025-01-08'));
+  const app = await openApp(t, {members});
+  await eventually(() => assert.match(app.$('#sheet-summary').textContent, /近三年人很少，已从 2022\.05 那批开始显示/));
+  assert.equal(app.$('#sheet-title').textContent, '7 位同学');
+  const on = app.$('#range [data-preset].on');
+  assert.equal(on.textContent, '2022.05 那批');
+  app.click('#range [data-preset="3y"]');
+  await eventually(() => assert.equal(app.$('#sheet-title').textContent, '1 位同学'));
+  assert.doesNotMatch(app.$('#sheet-summary').textContent, /那批/);
+});
+
+test('with enough recent people there is no extra choice: the three presets as before', async t => {
+  const app = await openApp(t, {members: [1, 2, 3, 4, 5].map(id => confirmedOn(id, '2026-10-20'))});
+  await eventually(() => assert.equal(app.$('#range [data-preset].on').dataset.preset, '3y'));
+  assert.deepEqual([...app.document.querySelectorAll('#range [data-preset]')].map(button => button.dataset.preset), ['1y', '3y', 'all']);
+});
